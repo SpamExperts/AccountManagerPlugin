@@ -29,7 +29,7 @@ except ImportError:
 
 setup(
     name = 'TracAccountManager',
-    version = '0.4',
+    version = '0.3.2',
     author = 'Matthew Good',
     author_email = 'trac@matt-good.net',
     maintainer = 'Steffen Hoffmann',
@@ -55,7 +55,6 @@ setup(
             'acct_mgr.admin = acct_mgr.admin',
             'acct_mgr.api = acct_mgr.api',
             'acct_mgr.db = acct_mgr.db',
-            'acct_mgr.macros = acct_mgr.macros',
             'acct_mgr.htfile = acct_mgr.htfile',
             'acct_mgr.http = acct_mgr.http',
             'acct_mgr.pwhash = acct_mgr.pwhash',

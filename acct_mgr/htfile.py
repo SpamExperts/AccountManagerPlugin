@@ -36,8 +36,7 @@ class AbstractPasswordFileStore(Component):
     # DEVEL: This option is subject to removal after next major release.
     filename = EnvRelativePathOption('account-manager', 'password_file', '',
         doc = N_("""Path relative to Trac environment or full host machine
-                path to password file - depreciated in favor of similar,
-                but store-specific options"""))
+                path to password file"""))
 
     def has_user(self, user):
         return user in self.get_users()
@@ -186,8 +185,8 @@ class HtPasswdStore(AbstractPasswordFileStore):
     {{{
     [account-manager]
     password_store = HtPasswdStore
-    htpasswd_file = /path/to/trac.htpasswd
-    htpasswd_hash_type = crypt|md5|sha|sha256|sha512 <- None or one of these
+    password_file = /path/to/trac.htpasswd
+    htpasswd_hash_type = crypt|md5|sha <- None or one of these options
     }}}
 
     Default behaviour is to detect presence of 'crypt' and use it or
@@ -196,9 +195,6 @@ class HtPasswdStore(AbstractPasswordFileStore):
 
     implements(IPasswordStore)
 
-    filename = EnvRelativePathOption('account-manager', 'htpasswd_file', '',
-        doc = N_("""Path relative to Trac environment or full host machine
-                path to password file"""))
     hash_type = Option('account-manager', 'htpasswd_hash_type', 'crypt',
         doc = N_("Default hash type of new/updated passwords"))
 
@@ -230,16 +226,13 @@ class HtDigestStore(AbstractPasswordFileStore):
     {{{
     [account-manager]
     password_store = HtDigestStore
-    htdigest_file = /path/to/trac.htdigest
+    password_file = /path/to/trac.htdigest
     htdigest_realm = TracDigestRealm
     }}}
     """
 
     implements(IPasswordStore)
 
-    filename = EnvRelativePathOption('account-manager', 'htdigest_file', '',
-        doc = N_("""Path relative to Trac environment or full host machine
-                path to password file"""))
     realm = Option('account-manager', 'htdigest_realm', '',
         doc = N_("Realm to select relevant htdigest file entries"))
 

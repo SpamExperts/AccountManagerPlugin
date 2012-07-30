@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 #
 # Copyright (C) 2005 Matthew Good <trac@matt-good.net>
-# Copyright (C) 2010-2012 Steffen Hoffmann <hoff.st@web.de>
+# Copyright (C) 2010-2011 Steffen Hoffmann <hoff.st@web.de>
 #
 # "THE BEER-WARE LICENSE" (Revision 42):
 # <trac@matt-good.net> wrote this file.  As long as you retain this notice you
@@ -22,15 +22,13 @@ from pkg_resources import resource_filename
 
 from trac import perm, util
 from trac.core import Component, TracError, implements
-from trac.config import Configuration, BoolOption, IntOption, Option
-from trac.env import open_environment
+from trac.config import Configuration, IntOption, BoolOption
 from trac.prefs import IPreferencePanelProvider
-from trac.util import hex_entropy
 from trac.util.presentation import separated
 from trac.util.text import to_unicode
 from trac.web import auth
 from trac.web.api import IAuthenticator
-from trac.web.main import IRequestHandler, IRequestFilter, get_environments
+from trac.web.main import IRequestHandler, IRequestFilter
 from trac.web import chrome
 from trac.web.chrome import INavigationContributor, ITemplateProvider, \
                             add_script, add_stylesheet
@@ -42,8 +40,6 @@ from acct_mgr.api import AccountManager, _, dgettext, ngettext, tag_, \
 from acct_mgr.db import SessionStore
 from acct_mgr.guard import AccountGuard
 from acct_mgr.util import containsAny, is_enabled
-
-UPDATE_INTERVAL = 3600 # Update cookies for persistant sessions only 1/hour.
 
 
 def _create_user(req, env, check_permissions=True):
@@ -65,9 +61,8 @@ def _create_user(req, env, check_permissions=True):
 
     # Prohibit some user names that are important for Trac and therefor
     # reserved, even if they're not in the permission store for some reason.
-    if username.lower() in ['anonymous', 'authenticated']:
-        error.message = Markup(_("Username %s is not allowed.")
-                               % tag.b(username))
+    if username in ['authenticated', 'anonymous']:
+        error.message = _("Username %s is not allowed.") % username
         raise error
 
     # NOTE: A user may exist in the password store but not in the permission
@@ -76,14 +71,10 @@ def _create_user(req, env, check_permissions=True):
     #   and cannot just check for the user being in the permission store.
     #   And obfuscate whether an existing user or group name
     #   was responsible for rejection of this user name.
-    for store_user in acctmgr.get_users():
-        # Do it carefully by disregarding case.
-        if store_user.lower() == username.lower():
-            error.message = Markup(_("""
-                Another account or group already exists, who's name
-                differs from %s only by case or is identical.
-                """) % tag.b(username))
-            raise error
+    if acctmgr.has_user(username):
+        error.message = _(
+            "Another account or group named %s already exists.") % username
+        raise error
 
     # Check whether there is also a user or a group with that name.
     if check_permissions:
@@ -100,11 +91,10 @@ def _create_user(req, env, check_permissions=True):
         #   was responsible for rejection of this username.
         for (perm_user, perm_action) in \
                 perm.PermissionSystem(env).get_all_permissions():
-            if perm_user.lower() == username.lower():
-                error.message = Markup(_("""
-                    Another account or group already exists, who's name
-                    differs from %s only by case or is identical.
-                    """) % tag.b(username))
+            if perm_user == username:
+                error.message = _(
+                    "Another account or group named %s already exists.") \
+                    % username
                 raise error
 
     # Always exclude some special characters, i.e. 
@@ -167,11 +157,11 @@ def _create_user(req, env, check_permissions=True):
         WHERE   sid=%s
         """, (username,))
     exists = cursor.fetchone()
-    if not exists[0]:
+    if not exists:
         cursor.execute("""
             INSERT INTO session
                     (sid,authenticated,last_visit)
-            VALUES  (%s,1,0)
+            VALUES  (%s,0,0)
             """, (username,))
 
     for attribute in ('name', 'email'):
@@ -437,6 +427,7 @@ class RegistrationModule(Component):
         return 'register'
 
     def get_navigation_items(self, req):
+        loginmod = LoginModule(self.env)
         if not self.enabled:
             return
         if req.authname == 'anonymous':
@@ -469,7 +460,7 @@ class RegistrationModule(Component):
             else:
                 chrome.add_notice(req, Markup(tag.span(Markup(_(
                      """Registration has been finished successfully.
-                     You may log in as user %(user)s now.""",
+                     You may login as user %(user)s now.""",
                      user=tag.b(req.args.get('username')))))))
                 req.redirect(req.href.login())
         data['reset_password_enabled'] = AccountModule(self.env
@@ -513,21 +504,6 @@ class LoginModule(auth.LoginModule):
         'account-manager', 'login_opt_list', False,
         """Set to True, to switch login page style showing alternative actions
         in a single listing together.""")
-
-    cookie_refresh_pct = IntOption(
-        'account-manager', 'cookie_refresh_pct', 10,
-        """Persistent sessions randomly get a new session cookie ID with
-        likelihood in percent per work hour given here (zero equals to never)
-        to decrease vulnerability of long-lasting sessions.""")
-
-    def __init__(self):
-        self.cookie_lifetime = self.env.config.getint(
-                                   'trac', 'auth_cookie_lifetime', 0)
-        if not self.cookie_lifetime > 0:
-            # Set the session to expire after some time and not
-            #   when the browser is closed - what is Trac core default).
-            self.cookie_lifetime = 86400 * 30   # AcctMgr default = 30 days
-        self.auth_share_participants = []
 
     def authenticate(self, req):
         if req.method == 'POST' and req.path_info.startswith('/login'):
@@ -646,19 +622,17 @@ class LoginModule(auth.LoginModule):
             self.env.config.set('trac', 'check_auth_ip', True)
         
         if acctmgr.persistent_sessions and name and \
-                'trac_auth_session' in req.incookie and \
-                int(req.incookie['trac_auth_session'].value) < \
-                int(time.time()) - UPDATE_INTERVAL:
+                'trac_auth_session' in req.incookie:
             # Persistent sessions enabled, the user is logged in
             # ('name' exists) and has actually decided to use this feature
             # (indicated by the 'trac_auth_session' cookie existing).
             # 
             # NOTE: This method is called on every request.
             
-            # Refresh session cookie
-            # Update the timestamp of the session so that it doesn't expire.
+            # Update the timestamp of the session so that it doesn't expire
             self.env.log.debug('Updating session %s for user %s' %
                                 (cookie.value, name))
+                                
             # Refresh in database
             db = self.env.get_db_cnx()
             cursor = db.cursor()
@@ -668,34 +642,23 @@ class LoginModule(auth.LoginModule):
                 WHERE   cookie=%s
                 """, (int(time.time()), cookie.value))
             db.commit()
-
-            # Change session ID (cookie.value) now and then as it otherwise
-            #   never would change at all (i.e. stay the same indefinitely and
-            #   therefore is more vulnerable to be hacked).
-            if random.random() + self.cookie_refresh_pct / 100.0 > 1:
-                old_cookie = cookie.value
-                # Update auth cookie value
-                cookie.value = hex_entropy()
-                self.env.log.debug('Changing session id for user %s to %s'
-                                    % (name, cookie.value))
-                db = self.env.get_db_cnx()
-                cursor = db.cursor()
-                cursor.execute("""
-                    UPDATE  auth_cookie
-                        SET cookie=%s
-                    WHERE   cookie=%s
-                    """, (cookie.value, old_cookie))
-                db.commit()
-                self._distribute_cookie(req, cookie.value)
-
-            cookie_lifetime = self.cookie_lifetime
+            
+            # Refresh session cookie
+            # TODO Change session id (cookie.value) now and then as it
+            #   otherwise never would change at all (i.e. stay the same
+            #   indefinitely and therefore is vulnerable to be hacked).
             cookie_path = self._get_cookie_path(req)
+            t = 86400 * 30 # AcctMgr default - Trac core defaults to 0 instead
+            cookie_lifetime = self.env.config.getint(
+                                         'trac', 'auth_cookie_lifetime', t)
             req.outcookie['trac_auth'] = cookie.value
             req.outcookie['trac_auth']['path'] = cookie_path
-            req.outcookie['trac_auth']['expires'] = cookie_lifetime
-            req.outcookie['trac_auth_session'] = int(time.time())
+            if cookie_lifetime > 0:
+                req.outcookie['trac_auth']['expires'] = cookie_lifetime
+            req.outcookie['trac_auth_session'] = 1
             req.outcookie['trac_auth_session']['path'] = cookie_path
-            req.outcookie['trac_auth_session']['expires'] = cookie_lifetime
+            if cookie_lifetime > 0:
+                req.outcookie['trac_auth_session']['expires'] = cookie_lifetime
             try:
                 if self.env.secure_cookies:
                     req.outcookie['trac_auth']['secure'] = True
@@ -723,26 +686,24 @@ class LoginModule(auth.LoginModule):
                 req.redirect(referer)
             self._redirect_back(req)
         res = auth.LoginModule._do_login(self, req)
-
-        cookie_path = self._get_cookie_path(req)
-        # Fix for Trac 0.11, that always sets path to `req.href()`.
-        req.outcookie['trac_auth']['path'] = cookie_path
-        # Inspect current cookie and try auth data distribution for SSO.
-        cookie = req.outcookie.get('trac_auth')
-        if cookie:
-            self._distribute_cookie(req, cookie.value)
-
         if req.args.get('rememberme', '0') == '1':
             # Check for properties to be set in auth cookie.
-            cookie_lifetime = self.cookie_lifetime
-            req.outcookie['trac_auth']['expires'] = cookie_lifetime
+            cookie_path = self._get_cookie_path(req)
+            t = 86400 * 30 # AcctMgr default - Trac core defaults to 0 instead
+            cookie_lifetime = self.env.config.getint(
+                                         'trac', 'auth_cookie_lifetime', t)
+            # Set the session to expire after some time
+            # (and not when the browser is closed - what is the default).
+            if cookie_lifetime > 0:
+                req.outcookie['trac_auth']['expires'] = cookie_lifetime
             
             # This cookie is used to indicate that the user is actually using
             # the "Remember me" feature. This is necessary for 
             # '_get_name_for_cookie()'.
             req.outcookie['trac_auth_session'] = 1
             req.outcookie['trac_auth_session']['path'] = cookie_path
-            req.outcookie['trac_auth_session']['expires'] = cookie_lifetime
+            if cookie_lifetime > 0:
+                req.outcookie['trac_auth_session']['expires'] = cookie_lifetime
             try:
                 if self.env.secure_cookies:
                     req.outcookie['trac_auth_session']['secure'] = True
@@ -767,51 +728,17 @@ class LoginModule(auth.LoginModule):
                 self._expire_session_cookie(req)
         return res
 
-    def _distribute_cookie(self, req, trac_auth):
-        # Single Sign On authentication distribution between multiple
-        #   Trac environments managed by AccountManager.
-        all_envs = get_environments(req.environ)
-        local_environ = req.environ.get('SCRIPT_NAME', None)
-        self.auth_share_participants = []
-
-        for environ, path in all_envs.iteritems():
-            if not environ == local_environ.lstrip('/'):
-                env = open_environment(path)
-                # Consider only Trac environments with equal, non-default
-                #   'auth_cookie_path', which enables cookies to be shared.
-                if self._get_cookie_path(req) == env.config.get('trac',
-                                                     'auth_cookie_path'):
-                    db = env.get_db_cnx()
-                    cursor = db.cursor()
-                    # Authentication cookie values must be unique. Ensure,
-                    #   there is no other session (or worst: session ID)
-                    #   associated to it.
-                    cursor.execute("""
-                        DELETE FROM auth_cookie
-                        WHERE  cookie=%s
-                        """, (trac_auth,))
-                    cursor.execute("""
-                        INSERT INTO auth_cookie
-                               (cookie,name,ipnr,time)
-                        VALUES (%s,%s,%s,%s)
-                        """, (trac_auth, req.remote_user, req.remote_addr,
-                              int(time.time())))
-                    db.commit()
-                    env.log.debug('Auth data received from: ' + local_environ)
-                    # Track env paths for easier auth revocation later on.
-                    self.auth_share_participants.append(path)
-                    self.log.debug('Auth distribution success: ' + environ)
-                else:
-                    self.log.debug('Auth distribution skipped: ' + environ)
-                env.shutdown()
-
     def _get_cookie_path(self, req):
         """Check request object for "path" cookie property.
 
         There is even a configuration option (since Trac 0.12).
         """
-        return self.env.config.get('trac', 'auth_cookie_path') or \
-                   req.base_path or '/'
+        try:
+            cookie_path = self.auth_cookie_path or req.base_path or '/'
+        except AttributeError:
+            # Fallback for Trac 0.11 compatibility
+            cookie_path = req.base_path or '/'
+        return cookie_path
 
     # overrides
     def _expire_cookie(self, req):
@@ -824,28 +751,8 @@ class LoginModule(auth.LoginModule):
         # First of all expire trac_auth_session cookie, if it exists.
         if 'trac_auth_session' in req.incookie:
             self._expire_session_cookie(req)
-        # Capture current cookie value.
-        cookie = req.incookie.get('trac_auth')
-        if cookie:
-            trac_auth = cookie.value
-        else:
-            trac_auth = None
-        # Then let auth.LoginModule expire all other cookies.
+        # And then let auth.LoginModule expire all other cookies.
         auth.LoginModule._expire_cookie(self, req)
-        # And finally revoke distributed authentication data too.
-        if trac_auth:
-            for path in self.auth_share_participants:
-                env = open_environment(path)
-                db = env.get_db_cnx()
-                cursor = db.cursor()
-                cursor.execute("""
-                    DELETE FROM auth_cookie
-                    WHERE  cookie=%s
-                    """, (trac_auth,))
-                db.commit()
-                env.log.debug('Auth data revoked from: ' + \
-                              req.environ.get('SCRIPT_NAME', 'unknown'))
-                env.shutdown()
 
     # Keep this code in a separate methode to be able to expire the session
     # cookie trac_auth_session independently of the trac_auth cookie.

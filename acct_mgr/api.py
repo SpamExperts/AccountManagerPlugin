@@ -12,10 +12,9 @@
 
 from pkg_resources  import resource_filename
 
-from trac.config    import BoolOption, Configuration, ExtensionOption, \
-                           Option, OrderedExtensionsOption
-from trac.core      import Component, ExtensionPoint, Interface, TracError, \
-                           implements
+from trac.config    import  BoolOption, Configuration, ExtensionOption, \
+                    Option, OrderedExtensionsOption
+from trac.core      import *
 
 # Import i18n methods.  Fallback modules maintain compatibility to Trac 0.11
 # by keeping Babel optional here.
@@ -47,12 +46,6 @@ except ImportError:
         return string
 
 from acct_mgr.hashlib_compat  import md5
-
-
-_user_keys = {
-    'auth_cookie': 'name',
-    'permission': 'username',
-    }
 
 
 class IPasswordStore(Interface):
@@ -186,12 +179,6 @@ class AccountManager(Component):
     # Public API
 
     def get_users(self):
-        """Get usernames from all active stores.
-
-        Because we allow concurrent active stores, and some stores even don't
-        warrant uniqueness within itself, multiple usernames should be
-        expected.
-        """
         users = []
         for store in self._password_store:
             users.extend(store.get_users())
@@ -328,29 +315,28 @@ class AccountManager(Component):
 
     def delete_user(self, user):
         user = self.handle_username_casing(user)
-        # Delete from password store 
-        store = self.find_user_store(user)
-        del_method = getattr(store, 'delete_user', None)
-        if callable(del_method):
-            del_method(user)
-        # Delete session attributes, session and any custom permissions
-        # set for the user.
         db = self.env.get_db_cnx()
         cursor = db.cursor()
-        for table in ['auth_cookie', 'session_attribute', 'session',
-                      'permission']:
-            # Preseed, since variable table and column names aren't allowed
+        # Delete session attributes, session and any custom permissions
+        # set for the user.
+        for table in ['session_attribute', 'session', 'permission']:
+            key = (table == 'permission') and 'username' or 'sid'
+            # Preseed, since variable table and column names are allowed
             # as SQL arguments (security measure agains SQL injections).
             sql = """
                 DELETE
                 FROM   %s
                 WHERE  %s=%%s
-                """ % (table, _user_keys.get(table, 'sid'))
+                """ % (table, key)
             cursor.execute(sql, (user,))
         db.commit()
         db.close()
+        # Delete from password store 
         self.log.debug('deleted user: %s' % user)
-        self._notify('deleted', user)
+        store = self.find_user_store(user)
+        if hasattr(store, 'delete_user'):
+            if store and store.delete_user(user):
+                self._notify('deleted', user)
 
     def supports(self, operation):
         try:
@@ -439,7 +425,7 @@ class AccountManager(Component):
               FROM  session_attribute
             WHERE   sid=%s
                 AND name='password_refreshed'
-                AND value='1'
+                AND value=1
             """
         cursor.execute(sql, (user,))
         if cursor.fetchone() is None:

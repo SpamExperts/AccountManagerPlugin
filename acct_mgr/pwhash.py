@@ -20,13 +20,6 @@ from acct_mgr.api import AccountManager, _, N_
 from acct_mgr.hashlib_compat import md5, sha1
 from acct_mgr.md5crypt import md5crypt
 
-try:
-    from passlib.apps import custom_app_context as passlib_ctxt
-except ImportError:
-    # not available
-    # Hint: Python2.5 is required too
-    passlib_ctxt = None
-
 
 class IPasswordHashMethod(Interface):
     def generate_hash(user, password):
@@ -39,7 +32,7 @@ class IPasswordHashMethod(Interface):
 class HtPasswdHashMethod(Component):
     implements(IPasswordHashMethod)
 
-    hash_type = Option('account-manager', 'db_htpasswd_hash_type', 'crypt',
+    hash_type = Option('account-manager', 'htpasswd_hash_type', 'crypt',
         doc = N_("Default hash type of new/updated passwords"))
 
     def generate_hash(self, user, password):
@@ -55,8 +48,8 @@ class HtPasswdHashMethod(Component):
 class HtDigestHashMethod(Component):
     implements(IPasswordHashMethod)
 
-    realm = Option('account-manager', 'db_htdigest_realm', '',
-        doc = N_("Realm to select relevant htdigest db entries"))
+    realm = Option('account-manager', 'htdigest_realm', '',
+        doc = "Realm to select relevant htdigest file entries")
 
     def generate_hash(self, user, password):
         user,password,realm = _encode(user, password, self.realm)
@@ -77,11 +70,11 @@ try:
 except ImportError:
     crypt = None
 
-def salt(salt_char_count=8):
+def salt():
     s = ''
-    v = long(hexlify(urandom(int(salt_char_count/8*6))), 16)
+    v = long(hexlify(urandom(6)), 16)
     itoa64 = './0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz'
-    for i in range(int(salt_char_count)):
+    for i in range(8):
         s += itoa64[v & 0x3f]; v >>= 6
     return s
 
@@ -91,10 +84,6 @@ def hash_prefix(hash_type):
         return '$apr1$'
     elif hash_type == 'sha':
         return '{SHA}'
-    elif hash_type == 'sha256':
-        return '$5$'
-    elif hash_type == 'sha512':
-        return '$6$'
     else:
         # use 'crypt' hash by default anyway
         return ''
@@ -104,36 +93,16 @@ def htpasswd(password, hash):
         return md5crypt(password, hash[6:].split('$')[0], '$apr1$')
     elif hash.startswith('{SHA}'):
         return '{SHA}' + sha1(password).digest().encode('base64')[:-1]
-    elif passlib_ctxt is not None and hash.startswith('$5$') and \
-            'sha256_crypt' in passlib_ctxt.policy.schemes():
-        return passlib_ctxt.encrypt(password, scheme="sha256_crypt",
-                                    rounds=5000, salt=hash[3:].split('$')[0])
-    elif passlib_ctxt is not None and hash.startswith('$6$') and \
-            'sha512_crypt' in passlib_ctxt.policy.schemes():
-        return passlib_ctxt.encrypt(password, scheme="sha512_crypt",
-                                    rounds=5000, salt=hash[3:].split('$')[0])
     elif crypt is None:
         # crypt passwords are only supported on Unix-like systems
         raise NotImplementedError(_("""The \"crypt\" module is unavailable
                                     on this platform."""))
     else:
-        if hash.startswith('$5$') or hash.startswith('$6$'):
-            # Import of passlib failed, now check, if crypt is capable.
-            if not crypt(password, hash).startswith(hash):
-                # No, so bail out.
-                raise NotImplementedError(_(
-                    """Neither are \"sha2\" hash algorithms supported by the
-                    \"crypt\" module on this platform nor is \"passlib\"
-                    available."""))
         return crypt(password, hash)
 
 def mkhtpasswd(password, hash_type=''):
     hash_prefix_ = hash_prefix(hash_type)
-    if hash_type.startswith('sha') and len(hash_type) > 3:
-        salt_ = salt(16)
-    else:
-        # Don't waste entropy to older hash types.
-        salt_ = salt()
+    salt_ = salt()
     if hash_prefix_ == '':
         if crypt is None:
             salt_ = '$apr1$' + salt_
