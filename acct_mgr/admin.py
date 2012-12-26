@@ -32,8 +32,7 @@ from acct_mgr.model     import del_user_attribute, email_verified, \
                                set_user_attribute
 from acct_mgr.register  import EmailVerificationModule, RegistrationError
 from acct_mgr.web_ui    import AccountModule
-from acct_mgr.util      import is_enabled, get_pretty_dateinfo, \
-                               pretty_precise_timedelta
+from acct_mgr.util      import is_enabled, get_pretty_dateinfo
 
 try:
     from trac.util  import as_int
@@ -82,10 +81,11 @@ def fetch_user_data(env, req):
                 account['email'] = Chrome(env).format_author(req,
                                                              account['email'])
     ts_seen = last_seen(env)
-    for username, last_visit in ts_seen:
-        account = accounts.get(username)
-        if account and last_visit:
-            account['last_visit'] = to_datetime(last_visit)
+    if ts_seen is not None:
+        for username, last_visit in ts_seen:
+            account = accounts.get(username)
+            if account and last_visit:
+                account['last_visit'] = to_datetime(last_visit)
     return sorted(accounts.itervalues(), key=lambda acct: acct['username'])
 
 def _getoptions(cls):
@@ -230,20 +230,6 @@ class AccountManagerAdminPanel(CommonTemplateProvider):
                             req.args.get('verify_email', False))
             self.config.set('account-manager', 'refresh_passwd',
                             req.args.get('refresh_passwd', False))
-            self.config.set('account-manager', 'login_attempt_max_count',
-                            as_int(req.args.get('login_attempt_max_count'),
-                            self.guard.login_attempt_max_count, min=0))
-            user_lock_time = as_int(req.args.get('user_lock_time'),
-                                    self.guard.user_lock_time, min=0)
-            self.config.set('account-manager', 'user_lock_time',
-                            user_lock_time)
-            # Hint: AccountGuard.lock_time_progression has the sanitized value.
-            self.config.set('account-manager', 'user_lock_time_progression',
-                            req.args.get('user_lock_time_progression') or \
-                            self.guard.lock_time_progression)
-            self.config.set('account-manager', 'user_lock_max_time',
-                            as_int(req.args.get('user_lock_max_time'),
-                            self.guard.user_lock_max_time, min=user_lock_time))
             self.config.save()
         sections = []
         for store in self.acctmgr.stores:
@@ -300,17 +286,12 @@ class AccountManagerAdminPanel(CommonTemplateProvider):
         numstores = range(0, stores.numstores() + 1)
         data = {
             '_dgettext': dgettext,
-            'pretty_precise_timedelta': pretty_precise_timedelta,
             'sections': sections,
             'numstores': numstores,
             'force_passwd_change': self.acctmgr.force_passwd_change,
             'persistent_sessions': self.acctmgr.persistent_sessions,
             'verify_email': self.acctmgr.verify_email,
-            'refresh_passwd': self.acctmgr.refresh_passwd,
-            'login_attempt_max_count': self.guard.login_attempt_max_count,
-            'user_lock_time': self.guard.user_lock_time,
-            'user_lock_max_time': self.guard.user_lock_max_time,
-            'user_lock_time_progression': self.guard.lock_time_progression
+            'refresh_passwd': self.acctmgr.refresh_passwd
             }
         result = req.args.get('done')
         if result == 'restart':
@@ -520,7 +501,7 @@ class AccountManagerAdminPanel(CommonTemplateProvider):
                     data['email'] = email
                 break
         ts_seen = last_seen(self.env, username)
-        if ts_seen:
+        if ts_seen is not None:
             data['last_visit'] = format_datetime(ts_seen[0][1], tzinfo=req.tz)
 
         attempts = []
