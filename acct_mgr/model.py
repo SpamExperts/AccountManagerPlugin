@@ -280,7 +280,10 @@ def last_seen(env, user=None, db=None):
     else:
         cursor.execute(sql)
     # Don't pass over the cursor (outside of scope), only it's content.
-    return [row for row in cursor]
+    res = []
+    for row in cursor:
+        res.append(row)
+    return not len(res) == 0 and res or None
 
 
 # Internal functions
