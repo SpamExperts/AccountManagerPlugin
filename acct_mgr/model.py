@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 #
-# Copyright (C) 2012,2013 Steffen Hoffmann <hoff.st@web.de>
+# Copyright (C) 2012 Steffen Hoffmann <hoff.st@web.de>
 # All rights reserved.
 #
 # This software is licensed as described in the file COPYING, which
@@ -8,10 +8,7 @@
 #
 # Author: Steffen Hoffmann <hoff.st@web.de>
 
-from trac.util.text import to_unicode
-
 from acct_mgr.hashlib_compat  import md5
-from acct_mgr.util import as_int
 
 _USER_KEYS = {
     'auth_cookie': 'name',
@@ -97,13 +94,13 @@ def get_user_attribute(env, username=None, authenticated=1, attribute=None,
         constraints.append(username)
     if authenticated is not None:
         columns.append('authenticated')
-        constraints.append(as_int(authenticated, 0, min=0, max=1))
+        constraints.append(authenticated)
     if attribute is not None:
         columns.append('name')
         constraints.append(attribute)
     if value is not None:
         columns.append('value')
-        constraints.append(to_unicode(value))
+        constraints.append(value)
     sel_columns = [col for col in ALL_COLS if col not in columns]
     if len(sel_columns) == 0:
         # No variable left, so only COUNTing is as a sensible task here. 
@@ -230,7 +227,7 @@ def del_user_attribute(env, username=None, authenticated=1, attribute=None,
         constraints.append(username)
     if authenticated is not None:
         columns.append('authenticated')
-        constraints.append(as_int(authenticated, 0, min=0, max=1))
+        constraints.append(authenticated)
     if attribute is not None:
         columns.append('name')
         constraints.append(attribute)
@@ -283,7 +280,10 @@ def last_seen(env, user=None, db=None):
     else:
         cursor.execute(sql)
     # Don't pass over the cursor (outside of scope), only it's content.
-    return [row for row in cursor]
+    res = []
+    for row in cursor:
+        res.append(row)
+    return not len(res) == 0 and res or None
 
 
 # Internal functions

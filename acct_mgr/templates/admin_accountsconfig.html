@@ -17,32 +17,23 @@
   <body>
     <h2>Accounts: Configuration</h2>
 
-      <fieldset>
-        <legend>General</legend>
-        <div class="field">
-          <label>
-            <input type="checkbox" name="ignore_auth_case" value="true"
-                   checked="${ignore_auth_case and 'checked' or None}" />
-            Convert login names to lower case on registration and login
-          </label>
-        </div>
-      </fieldset>
-
+    <div class="notice system-message" py:if="result">
+      <p>${result}</p>
+    </div>
     <form id="accountsconfig" class="mod" method="post">
       <fieldset py:for="section in sections">
         <legend>
           <label>
             <select name="${section.classname}" >
               <option py:for="order in numstores" value="${order}"
-                      selected="${order == section.order or None}">
+                selected="${order == section.order or None}">
                 ${order == 0 and '--' or order}
               </option>
             </select>
             $section.name
           </label>
         </legend>
-        <img class="icon" alt="Password store icon"
-             src="${href.chrome('/acct_mgr/users.png')}" />
+
         <div class="field" py:for="option in section.options">
           <label>$option.label:
             <py:choose>
@@ -68,125 +59,51 @@
       </fieldset>
 
       <fieldset>
-        <legend>Account Verification</legend>
-        <img class="icon" alt="Account approval icon"
-             src="${href.chrome('/acct_mgr/approval.png')}" />
-        <div class="field">
-          <label>
-            <input type="checkbox" name="require_approval" value="true"
-                   checked="${require_approval and 'checked' or None}" />
-            Require administrative approval for new registrations.</label>
-        </div>
-        <div class="field">
-          <label>
-            <input type="checkbox" name="verify_email" value="true"
-                   checked="${verify_email and 'checked' or None}" />
-            Force users to verify their email addresses.</label>
-        </div>
-      </fieldset>
-
-      <fieldset>
-        <legend>Refresh/Reset Password</legend>
-        <img class="icon" alt="Password refresh icon"
-             src="${href.chrome('/acct_mgr/refresh.png')}" />
-        <div class="field">
-          <label>
-            <input type="checkbox" name="force_passwd_change" value="true"
-                   checked="${force_passwd_change and 'checked' or None}" />
-            Force users to change passwords after a password reset.
-          </label>
-        </div>
-        <hr />
-        <div class="field">
-          <div class="notice system-message" py:if="result">
-            <p>${result}</p>
+        <legend>Password Refresh</legend>
+        <label>
+          <input type="checkbox" name="refresh_passwd" value="true"
+                 checked="${refresh_passwd and 'checked' or None}" />
+          Silently update password hashes on next successful login.</label>
+          <div class="buttons">
+            <input type="submit" name="restart"
+              value="${dgettext('acct_mgr', 'Restart')}" />
           </div>
-          <label>
-            <input type="checkbox" name="refresh_passwd" value="true"
-                   checked="${refresh_passwd and 'checked' or None}" />
-            Silently update password hashes on next successful login.</label>
-        </div>
-        <div class="buttons">
-          <input type="submit" name="restart"
-                 value="${dgettext('acct_mgr', 'Restart')}" />
-        </div>
-      </fieldset>
-
-      <fieldset>
-        <legend>Account guard</legend>
-        <img class="icon" alt="Account guard icon"
-             src="${href.chrome('/acct_mgr/guard.png')}" />
-        <p>
-          <label>
-            Failed login attempt count max:
-            <input class="textwidget" type="text"
-                   name="login_attempt_max_count"
-                   value="$login_attempt_max_count" />
-            <p class="help">
-              Lock user account after specified number of failed attempts.
-              Value zero means 'no limit'.
-            </p>
-          </label>
-        </p>
-        <p py:if="login_attempt_max_count">
-          <label i18n:msg="">
-            Drop lock after
-            <input class="textwidget" type="text" name="user_lock_time"
-                   value="$user_lock_time" />
-            seconds (0 = unlimited lock time)
-          </label>
-        </p>
-        <p py:if="login_attempt_max_count and user_lock_time">
-          <label>
-            Lock time progression factor:
-            <input class="textwidget" type="text"
-                   name="user_lock_time_progression"
-                   value="$user_lock_time_progression" />
-            <p class="help">
-              Extend user account lock time incrementally. This is
-              based on logarithmic calculation and decimal numbers accepted:
-              Value '1' means constant lock time per failed login attempt.
-              Value '2' means double locktime after 2nd lock activation,
-              four times the initial locktime after 3rd, and so on.
-            </p>
-          </label>
-          <p>
-            <label i18n:msg="">
-              Upper lock time limit:
-              <input class="textwidget" type="text" name="user_lock_max_time"
-                     value="$user_lock_max_time"
-                     title="${pretty_precise_timedelta(None,
-                                                   diff=user_lock_max_time)}"
-                     disabled="${user_lock_time_progression == 1 and
-                                 'disabled' or None}"/>
-              seconds
-              <p class="help">
-                This is relevant only with a lock time progression factor > 1.
-              </p>
-            </label>
-          </p>
-        </p>
       </fieldset>
 
       <fieldset>
         <legend>Persistent Sessions</legend>
-        <div class="field">
-          <label>
-            <input type="checkbox" name="persistent_sessions" value="true"
-                   checked="${persistent_sessions and 'checked' or None}" />
-            Allow the user to be remembered across sessions without needing to
-            re-authenticate.
-          </label>
-          <p class="help" i18n:msg="">This is, user checks a "Remember Me"
-            <tt>checkbox</tt> and, next time he visits the site within
-            30 days, he'll be remembered and automatically authenticated.
-          </p>
-        </div>
+        <label>
+          <input type="checkbox" name="persistent_sessions" value="true"
+                 checked="${persistent_sessions and 'checked' or None}" />
+          Allow the user to be remembered across sessions without needing to
+          re-authenticate.
+        </label>
+        <p class="help" i18n:msg="">This is, user checks a "Remember Me"
+          <tt>checkbox</tt> and, next time he visits the site within
+          30 days, he'll be remembered and automatically authenticated.
+        </p>
+      </fieldset>
+
+      <fieldset>
+        <legend>Password Reset</legend>
+        <label>
+          <input type="checkbox" name="force_passwd_change" value="true"
+                 checked="${force_passwd_change and 'checked' or None}" />
+          Force users to change passwords after a password reset.
+        </label>
+      </fieldset>
+
+      <fieldset>
+        <legend>Verify email</legend>
+        <label>
+          <input type="checkbox" name="verify_email" value="true"
+                 checked="${verify_email and 'checked' or None}" />
+          Force users to verify their email addresses.</label>
       </fieldset>
 
       <div class="buttons">
         <input type="submit" name="save"
-          value="${dgettext('acct_mgr', 'Apply changes')}" />
+          value="${dgettext('acct_mgr', 'Save')}" />
       </div>
     </form>
   </body>

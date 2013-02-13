@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 #
 # Copyright (C) 2005 Matthew Good <trac@matt-good.net>
-# Copyright (C) 2010-2013 Steffen Hoffmann <hoff.st@web.de>
+# Copyright (C) 2010-2012 Steffen Hoffmann <hoff.st@web.de>
 # Copyright (C) 2011 Edgewall Software
 # All rights reserved.
 #
@@ -17,11 +17,9 @@ from genshi.builder import tag
 
 from trac.config import Option
 from trac.util.datefmt import format_datetime, pretty_timedelta
-from trac.util.datefmt import to_datetime, utc
-from trac.util.text import to_unicode
 from trac.web.chrome import Chrome
 
-from acct_mgr.api import _, ngettext
+from acct_mgr.api import _
 
 
 # Fix for issue http://bugs.python.org/issue8797 in Python 2.6
@@ -69,25 +67,6 @@ class EnvRelativePathOption(Option):
             return path
         return os.path.normpath(os.path.join(instance.env.path, path))
 
-
-try:
-    from trac.util import as_int
-# Provide the function for compatibility (available since Trac 0.12).
-except ImportError:
-    def as_int(s, default, min=None, max=None):
-        """Convert s to an int and limit it to the given range, or
-        return default if unsuccessful (copied verbatim from Trac0.12dev).
-        """
-        try:
-            value = int(s)
-        except (TypeError, ValueError):
-            return default
-        if min is not None and value < min:
-            value = min
-        if max is not None and value > max:
-            value = max
-        return value
-
 # taken from a comment of Horst Hansen
 # at http://code.activestate.com/recipes/65441
 def containsAny(str, set):
@@ -102,25 +81,6 @@ def if_enabled(func):
             return None
         return func(self, *args, **kwds)
     return wrap
-
-try:
-    from trac.util.text import exception_to_unicode
-# Provide the function for compatibility (available since Trac 0.11.3).
-except:
-    def exception_to_unicode(e, traceback=False):
-        """Convert an `Exception` to an `unicode` object.
-
-        In addition to `to_unicode`, this representation of the exception
-        also contains the class name and optionally the traceback.
-        This replicates the Trac core method for backwards-compatibility.
-        """
-        message = '%s: %s' % (e.__class__.__name__, to_unicode(e))
-        if traceback:
-            from trac.util import get_last_traceback
-            traceback_only = get_last_traceback().split('\n')[:-2]
-            message = '\n%s\n%s' % (to_unicode('\n'.join(traceback_only)),
-                                    message)
-        return message
 
 # Compatibility code for `ComponentManager.is_enabled`
 # (available since Trac 0.12)
@@ -137,7 +97,7 @@ def is_enabled(env, cls):
         return env.enabled[cls]
 
 # Compatibility code for `pretty_dateinfo` from template data dict
-# (available since Trac 1.0)
+# (available since Trac 0.13)
 def get_pretty_dateinfo(env, req):
     """Return the function defined in trac.web.chrome.Chrome.populate_data .
 
@@ -161,45 +121,3 @@ def get_pretty_dateinfo(env, req):
                 title = absolute
             return tag.span(label, title=title)
     return fn and fn or _pretty_dateinfo
-
-def pretty_precise_timedelta(time1, time2=None, resolution=None, diff=0):
-    """Calculate time delta between two `datetime` objects and format
-    for prettyprinting.
-
-    If either `time1` or `time2` is None, the current time will be used
-    instead.  Extending the signature of trac.util.datefmt.pretty_timedelta
-    pre-calculated timedeltas may be specified by the alternative `diff`
-    keyword argument that takes precedence if used.
-    """
-    if diff:
-        age_s = diff
-    else:
-        time1 = to_datetime(time1)
-        time2 = to_datetime(time2)
-        if time1 > time2:
-            time2, time1 = time1, time2
-        diff = time2 - time1
-        age_s = int(diff.days * 86400 + diff.seconds)
-    age_d = age_s // 86400
-
-    # DEVEL: Always reduce resolution as required by `resolution` argument.
-    if resolution:
-        if age_s < resolution:
-            return _("less than %s"
-                     % pretty_precise_timedelta(None, diff=resolution))
-    # Get a compact string by stripping non-significant parts.
-    if age_s == 0:
-        return ''
-    # Show seconds for small time values, even in timedeltas > 1 day.
-    t = age_s - age_d * 86400
-    if t > 0 and t < 120:
-        t = ngettext('%(num)i second', '%(num)i seconds', t)
-        if age_d == 0:
-            return t
-    elif age_d != age_s / 86400.0:
-        t = format_datetime(age_s - age_d * 86400, format='%X', tzinfo=utc)
-        if age_d == 0:
-            return t
-    # TRANSLATOR: Pretty datetime representation, time part provided by string substitution.
-    return (ngettext("%(num)i day %%s", "%(num)i days %%s", age_d)
-            % (str(t) != '0' and t or '')).rstrip()

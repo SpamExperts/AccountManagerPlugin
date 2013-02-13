@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 #
 # Copyright (C) 2005-2007 Matthew Good <trac@matt-good.net>
-# Copyright (C) 2011,2012 Steffen Hoffmann <hoff.st@web.de>
+# Copyright (C) 2011 Steffen Hoffmann <hoff.st@web.de>
 # All rights reserved.
 #
 # This software is licensed as described in the file COPYING, which
@@ -32,7 +32,10 @@ class AbstractPasswordFileStore(Component):
     """
     abstract = True
 
-    # Note: 'filename' is a required, store-specific option.
+    # DEVEL: This option is subject to removal after next major release.
+    filename = EnvRelativePathOption('account-manager', 'password_file', '',
+        doc = """Path to password file - depreciated in favor of other, more
+              store-specific options""")
 
     def has_user(self, user):
         return user in self.get_users()
@@ -45,12 +48,11 @@ class AbstractPasswordFileStore(Component):
             return []
         return self._get_users(filename)
 
-    def set_password(self, user, password, old_password=None, overwrite=True):
+    def set_password(self, user, password, old_password = None):
         user = user.encode('utf-8')
         password = password.encode('utf-8')
         return not self._update_file(self.prefix(user),
-                                     self.userline(user, password),
-                                     overwrite)
+                                     self.userline(user, password))
 
     def delete_user(self, user):
         user = user.encode('utf-8')
@@ -67,24 +69,21 @@ class AbstractPasswordFileStore(Component):
         prefix = self.prefix(user)
         f = None
         try:
-            # Python<2.5: Can't have 'except' and 'finally' in same 'try'
-            #   statement together, but we still need to care for Python 2.4
-            #   (RHEL5.x) for now.
-            try:
-                f = open(filename, 'rU')
-                for line in f:
-                    if line.startswith(prefix):
-                        return self._check_userline(user, password,
-                               line[len(prefix):].rstrip('\n'))
-            except:
-                self.log.error('acct_mgr: check_password() -- '
-                               'Can\'t read password file "%s"' % filename)
-        finally:
-            if f:
-                f.close()
+            f = open(filename, 'rU')
+            for line in f:
+                if line.startswith(prefix):
+                    return self._check_userline(user, password,
+                            line[len(prefix):].rstrip('\n'))
+        # DEVEL: Better use new 'finally' statement here, but
+        #   still need to care for Python 2.4 (RHEL5.x) for now
+        except:
+            self.log.error('acct_mgr: check_password() -- '
+                           'Can\'t read password file "%s"' % filename)
+        if isinstance(f, file):
+            f.close()
         return None
 
-    def _update_file(self, prefix, userline, overwrite=True):
+    def _update_file(self, prefix, userline):
         """Add or remove user and change password.
 
         If `userline` is empty, the line starting with `prefix` is removed
@@ -95,7 +94,6 @@ class AbstractPasswordFileStore(Component):
         Returns `True` if a line matching `prefix` was updated,
         `False` otherwise.
         """
-        f = None
         filename = str(self.filename)
         matched = False
         new_lines = []
@@ -112,6 +110,8 @@ class AbstractPasswordFileStore(Component):
             #   are currently not detected and will get overwritten.
             #   This could be fixed by file locking, but a cross-platform
             #   implementation is certainly non-trivial.
+            # DEVEL: I've seen the AtomicFile object in trac.util lately,
+            #   that may be worth a try.
             if len(lines) > 0:
                 # predict eol style for lines without eol characters
                 if not os.linesep == '\n':
@@ -126,10 +126,7 @@ class AbstractPasswordFileStore(Component):
                 for line in lines:
                     if line.startswith(prefix):
                         if not matched and userline:
-                            if overwrite:
-                                new_lines.append(userline + eol)
-                            else:
-                                new_lines.append(line.rstrip('\r\n') + eol)
+                            new_lines.append(userline + eol)
                         matched = True
                     # preserve existing lines with proper eol
                     elif line.endswith(eol) and not \
@@ -168,7 +165,9 @@ class AbstractPasswordFileStore(Component):
                     and its parent directory."""))
             else:
                 raise
-        if f:
+        # DEVEL: Better use new 'finally' statement here, but
+        #   still need to care for Python 2.4 (RHEL5.x) for now
+        if isinstance(f, file):
             # Close open file now, even after exception raised.
             f.close()
             if not f.closed:

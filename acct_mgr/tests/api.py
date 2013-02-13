@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 #
-# Copyright (C) 2012,2013 Steffen Hoffmann <hoff.st@web.de>
+# Copyright (C) 2012 Steffen Hoffmann <hoff.st@web.de>
 # All rights reserved.
 #
 # This software is licensed as described in the file COPYING, which
@@ -12,166 +12,25 @@ import shutil
 import tempfile
 import unittest
 
-from Cookie import SimpleCookie as Cookie
+from trac.perm  import PermissionSystem
+from trac.test  import EnvironmentStub, Mock
 
-from trac.core import TracError
-from trac.perm import PermissionCache, PermissionSystem
-from trac.test import EnvironmentStub, Mock
-from trac.web.main import RequestDispatcher
-from trac.web.session import Session
-
-from acct_mgr.api import AccountManager
-from acct_mgr.db import SessionStore
+from acct_mgr.api  import AccountManager
 
 
-class _BaseTestCase(unittest.TestCase):
+class PermissionTestCase(unittest.TestCase):
+
     def setUp(self):
-        self.env = EnvironmentStub(default_data=True,
-                enable=['trac.*', 'acct_mgr.api.*',
-                        'acct_mgr.db.SessionStore', 'acct_mgr.pwhash.*',
-                        'acct_mgr.htfile.HtDigestStore']
-        )
+        self.env = EnvironmentStub(
+                enable=['trac.*', 'acct_mgr.api.*'])
         self.env.path = tempfile.mkdtemp()
         self.perm = PermissionSystem(self.env)
-        self.db = self.env.get_db_cnx()
-
-    def tearDown(self):
-        self.db.close()
-        # Really close db connections.
-        self.env.shutdown()
-        shutil.rmtree(self.env.path)
-
-
-class AccountManagerTestCase(_BaseTestCase):
-
-    def setUp(self):
-        _BaseTestCase.setUp(self)
-        self.mgr = AccountManager(self.env)
-
-        self.store = SessionStore(self.env)
-        self.store.set_password('user', 'passwd')
-        args = dict(username='user', name='', email='')
-        incookie = Cookie()
-        incookie['trac_session'] = '123456'
-        self.req = Mock(authname='', args=args, authenticated=True,
-                        base_path='/', callbacks=dict(),
-                        href=Mock(prefs=lambda x: None),
-                        incookie=incookie, outcookie=Cookie(),
-                        redirect=lambda x: None)
-        self.req.path_info = '/'
-
-   # Tests
-
-    def test_set_password(self):
-        # Can't work without at least one password store.
-        self.assertRaises(TracError, self.mgr.set_password, 'user', 'passwd')
-        self.env.config.set(
-            'account-manager', 'password_store', 'SessionStore')
-        self.mgr.set_password('user', 'passwd')
-        # Refuse to overwrite existing credetialy, if requested.
-        self.assertRaises(TracError, self.mgr.set_password, 'user', 'passwd',
-                          overwrite=False)
-
-    def test_approval_admin_keep_perm(self):
-        self.perm.grant_permission('admin', 'ACCTMGR_ADMIN')
-
-        # Some elevated permission action.
-        action = 'USER_VIEW'
-        self.assertFalse(action in PermissionCache(self.env))
-
-        req = self.req
-        req.perm = PermissionCache(self.env, 'admin')
-        req.session = Session(self.env, req)
-        req.session.save()
-        self.mgr.pre_process_request(req, None)
-        self.assertTrue(action in req.perm)
-
-        # Mock an authenticated request with account approval pending.
-        req.session['approval'] = 'pending'
-        req.session.save()
-        # Don't touch admin user requests.
-        self.mgr.pre_process_request(req, None)
-        self.assertTrue(action in req.perm)
-
-    def test_approval_user_strip_perm(self):
-        # Some elevated permission action.
-        action = 'USER_VIEW'
-        self.assertFalse(action in PermissionCache(self.env))
-        self.perm.grant_permission('user', action)
-
-        req = self.req
-        req.perm = PermissionCache(self.env, 'user')
-        req.session = Session(self.env, req)
-        req.session.save()
-        self.mgr.pre_process_request(req, None)
-        self.assertTrue(action in req.perm)
-
-        # Mock an authenticated request with account approval pending.
-        req.session['approval'] = 'pending'
-        req.session.save()
-        # Remove elevated permission, if account approval is pending.
-        self.mgr.pre_process_request(req, None)
-        self.assertFalse(action in req.perm)
-
-    def test_maybe_update_hash(self):
-        # Configure another, primary password store.
-        self.env.config.set('account-manager', 'password_store',
-                            'HtDigestStore, SessionStore')
-        self.env.config.set('account-manager', 'htdigest_file', '.htdigest')
-        cursor = self.db.cursor()
-        cursor.execute("""
-            INSERT INTO session_attribute
-                   (sid,authenticated,name,value)
-            VALUES (%s,%s,%s,%s)
-        """, ('user', 1, 'password_refreshed', '1'))
-
-        # Refresh not happening due to 'password_refreshed' attribute.
-        self.mgr._maybe_update_hash('user', 'passwd')
-        cursor.execute("""
-            SELECT value
-            FROM   session_attribute
-            WHERE  sid='user'
-            AND    authenticated=1
-            AND    name='password'
-        """)
-        self.assertNotEqual(cursor.fetchall(), [])
-
-        cursor.execute("""
-            DELETE
-            FROM   session_attribute
-            WHERE  sid='user'
-            AND    authenticated=1
-            AND    name='password_refreshed'
-        """)
-        # Refresh (and effectively migrate) user credentials.
-        self.mgr._maybe_update_hash('user', 'passwd')
-        cursor.execute("""
-            SELECT value
-            FROM   session_attribute
-            WHERE  sid='user'
-            AND    authenticated=1
-            AND    name='password'
-        """)
-        self.assertEqual(cursor.fetchall(), [])
-        cursor.execute("""
-            SELECT value
-            FROM   session_attribute
-            WHERE  sid='user'
-            AND    authenticated=1
-            AND    name='password_refreshed'
-        """)
-        self.assertEqual(cursor.fetchall(), [('1',)])
-
-
-class PermissionTestCase(_BaseTestCase):
-
-    def setUp(self):
-        _BaseTestCase.setUp(self)
         self.req = Mock()
         self.actions = ['ACCTMGR_ADMIN', 'ACCTMGR_CONFIG_ADMIN',
                         'ACCTMGR_USER_ADMIN', 'EMAIL_VIEW', 'USER_VIEW']
 
-   # Tests
+    def tearDown(self):
+        shutil.rmtree(self.env.path)
 
     def test_available_actions(self):
         for action in self.actions:
@@ -206,10 +65,8 @@ class PermissionTestCase(_BaseTestCase):
                 self.assertFalse(self.perm.check_permission('TRAC_ADMIN',
                                                             user))
 
-
 def suite():
     suite = unittest.TestSuite()
-    suite.addTest(unittest.makeSuite(AccountManagerTestCase, 'test'))
     suite.addTest(unittest.makeSuite(PermissionTestCase, 'test'))
     return suite
 

@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 #
 # Copyright (C) 2005 Matthew Good <trac@matt-good.net>
-# Copyright (C) 2010-2013 Steffen Hoffmann <hoff.st@web.de>
+# Copyright (C) 2010-2012 Steffen Hoffmann <hoff.st@web.de>
 # All rights reserved.
 #
 # This software is licensed as described in the file COPYING, which
@@ -19,7 +19,7 @@ from os import urandom
 
 from trac import perm, util
 from trac.core import Component, TracError, implements
-from trac.config import BoolOption, Option
+from trac.config import Option
 from trac.env import open_environment
 from trac.web import auth, chrome
 from trac.web.main import IRequestHandler, IRequestFilter
@@ -55,10 +55,6 @@ class GenericRegistrationInspector(Component):
 
     abstract = True
 
-    @property
-    def doc(self):
-        return N_(self.__class__.__doc__)
-
     def render_registration_fields(self, req, data):
         """Emit one or multiple additional fields for registration form built.
 
@@ -85,13 +81,13 @@ class GenericRegistrationInspector(Component):
 class BasicCheck(GenericRegistrationInspector):
     """A collection of basic checks.
 
-This includes checking for
- * emptiness (no user input for username and/or password)
- * some blacklisted username characters
- * upper-cased usernames (reserved for Trac permission actions)
- * some reserved usernames
- * a username duplicate in configured password stores
-"""
+    This includes checking for
+     * emptiness (no user input for username and/or password)
+     * some blacklisted username characters
+     * upper-cased usernames (reserved for Trac permission actions)
+     * some reserved usernames
+     * a username duplicate in configured password stores
+    """
 
     def validate_registration(self, req):
         acctmgr = AccountManager(self.env)
@@ -157,8 +153,8 @@ This includes checking for
 class BotTrapCheck(GenericRegistrationInspector):
     """A collection of simple bot checks.
 
-''This check is bypassed for requests by an admin user.''
-"""
+    This check is bypassed for requests by an admin user.
+    """
 
     reg_basic_token = Option('account-manager', 'register_basic_token', '',
         doc="A string required as input to pass verification.")
@@ -207,8 +203,8 @@ class BotTrapCheck(GenericRegistrationInspector):
 class EmailCheck(GenericRegistrationInspector):
     """A collection of checks for email addresses.
 
-''This check is bypassed, if account verification is disabled.''
-"""
+    This check is bypassed, if account verification is disabled.
+    """
 
     def render_registration_fields(self, req, data):
         """Add an email address text input field to the registration form."""
@@ -223,7 +219,7 @@ class EmailCheck(GenericRegistrationInspector):
         from acct_mgr.web_ui import AccountModule
         reset_password = AccountModule(self.env).reset_password_enabled
         verify_account = is_enabled(self.env, EmailVerificationModule) and \
-                         EmailVerificationModule(self.env).verify_email
+                         AccountManager(self.env).verify_email
         if verify_account:
             # TRANSLATOR: Registration form hints for a mandatory input field.
             hint = tag.p(_("""The email address is required for Trac to send
@@ -250,7 +246,7 @@ class EmailCheck(GenericRegistrationInspector):
         email = req.args.get('email', '').strip()
 
         if is_enabled(self.env, EmailVerificationModule) and \
-                EmailVerificationModule(self.env).verify_email:
+                acctmgr.verify_email:
             if not email:
                 raise RegistrationError(N_(
                     "You must specify a valid email address.")
@@ -265,9 +261,9 @@ class EmailCheck(GenericRegistrationInspector):
 class RegExpCheck(GenericRegistrationInspector):
     """A collection of checks based on regular expressions.
 
-''It depends on !EmailCheck being enabled too for using it's input field.
-Likewise email checking is bypassed, if account verification is disabled.''
-"""
+    It depends on EmailCheck being enabled too for using it's input field.
+    Likewise email checking is bypassed, if account verification is disabled.
+    """
 
     username_regexp = Option('account-manager', 'username_regexp',
         r'(?i)^[A-Z0-9.\-_]{5,}$',
@@ -289,9 +285,8 @@ Likewise email checking is bypassed, if account verification is disabled.''
             )
 
         email = req.args.get('email', '').strip()
-        if is_enabled(self.env, EmailCheck) and \
-                is_enabled(self.env, EmailVerificationModule) and \
-                EmailVerificationModule(self.env).verify_email:
+        if acctmgr.verify_email and is_enabled(self.env, EmailCheck) and \
+                is_enabled(self.env, EmailVerificationModule):
             if self.email_regexp.strip() != "" and \
                     not re.match(self.email_regexp.strip(), email):
                 raise RegistrationError(N_(
@@ -303,8 +298,8 @@ Likewise email checking is bypassed, if account verification is disabled.''
 class UsernamePermCheck(GenericRegistrationInspector):
     """Check for usernames referenced in the permission system.
 
-''This check is bypassed for requests by an admin user.''
-"""
+    This check is bypassed for requests by an admin user.
+    """
 
     def validate_registration(self, req):
         if req.perm.has_permission('ACCTMGR_USER_ADMIN'):
@@ -340,11 +335,6 @@ class RegistrationModule(CommonTemplateProvider):
     """
 
     implements(chrome.INavigationContributor, IRequestHandler)
-
-    require_approval = BoolOption(
-        'account-manager', 'require_approval', False,
-        doc="Whether account registration requires administrative approval "
-            "to enable the account or not.")
 
     def __init__(self):
         self.acctmgr = AccountManager(self.env)
@@ -398,7 +388,7 @@ class RegistrationModule(CommonTemplateProvider):
          'ignore_auth_case': self.config.getbool('trac', 'ignore_auth_case')
         }
         verify_enabled = is_enabled(self.env, EmailVerificationModule) and \
-                         EmailVerificationModule(self.env).verify_email
+                         acctmgr.verify_email
         data['verify_account_enabled'] = verify_enabled
         if req.method == 'POST' and action == 'create':
             try:
@@ -414,17 +404,6 @@ class RegistrationModule(CommonTemplateProvider):
                     message = message % e.msg_args
                 chrome.add_warning(req, Markup(message))
             else:
-                if self.require_approval:
-                    set_user_attribute(self.env, username, 'approval',
-                                       N_('pending'))
-                    # Notify admin user about registration pending for review.
-                    acctmgr._notify('registration_approval_required',
-                                    username)
-                    chrome.add_notice(req, Markup(tag.span(Markup(_(
-                        "Your username has been registered successfully, but "
-                        "your account requires administrative approval. "
-                        "Please proceed according to local policy."))))
-                    )
                 if verify_enabled:
                     chrome.add_notice(req, Markup(tag.span(Markup(_(
                         """Your username has been successfully registered but
@@ -441,7 +420,7 @@ class RegistrationModule(CommonTemplateProvider):
                 req.redirect(req.href.login())
         # Collect additional fields from IAccountRegistrationInspector's.
         fragments = dict(required=[], optional=[])
-        for inspector in acctmgr.register_checks:
+        for inspector in acctmgr._register_check:
             try:
                 fragment, f_data = inspector.render_registration_fields(req,
                                                                         data)
@@ -483,10 +462,6 @@ class EmailVerificationModule(CommonTemplateProvider):
 
     implements(IRequestFilter, IRequestHandler)
 
-    verify_email = BoolOption(
-        'account-manager', 'verify_email', True,
-        doc="Verify the email address of Trac users.")
-
     def __init__(self, *args, **kwargs):
         self.email_enabled = True
         if self.config.getbool('announcer', 'email_enabled') != True and \
@@ -515,7 +490,7 @@ class EmailVerificationModule(CommonTemplateProvider):
                 chrome.add_warning(
                     req, Markup(gettext(e.message)))
                 req.redirect(req.href.prefs(None))
-        if self.verify_email and handler is not self and \
+        if AccountManager(self.env).verify_email and handler is not self and \
                 'email_verification_token' in req.session and \
                 not req.perm.has_permission('ACCTMGR_ADMIN'):
             # TRANSLATOR: Your permissions have been limited until you ...
@@ -537,12 +512,13 @@ class EmailVerificationModule(CommonTemplateProvider):
 
         email = req.session.get('email')
         # Only send verification if the user entered an email address.
-        if self.verify_email and self.email_enabled is True and email and \
+        acctmgr = AccountManager(self.env)
+        if acctmgr.verify_email and self.email_enabled is True and email and \
                 email != req.session.get('email_verification_sent_to') and \
                 not req.perm.has_permission('ACCTMGR_ADMIN'):
             req.session['email_verification_token'] = self._gen_token()
             req.session['email_verification_sent_to'] = email
-            AccountManager(self.env)._notify(
+            acctmgr._notify(
                 'email_verification_requested', 
                 req.authname, 
                 req.session['email_verification_token']

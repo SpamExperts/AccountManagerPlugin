@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 #
 # Copyright (C) 2005 Matthew Good <trac@matt-good.net>
-# Copyright (C) 2011-2013 Steffen Hoffmann <hoff.st@web.de>
+# Copyright (C) 2011,2012 Steffen Hoffmann <hoff.st@web.de>
 # All rights reserved.
 #
 # This software is licensed as described in the file COPYING, which
@@ -9,27 +9,26 @@
 #
 # Author: Matthew Good <trac@matt-good.net>
 
-from pkg_resources import resource_filename
+from pkg_resources  import resource_filename
 
-from trac.config import BoolOption, Configuration, ExtensionOption
-from trac.config import Option, OrderedExtensionsOption
-from trac.core import Component, ExtensionPoint, Interface, TracError
-from trac.core import implements
-from trac.perm import IPermissionRequestor, PermissionCache
-from trac.web.chrome import ITemplateProvider
-from trac.web.main import IRequestFilter
+from trac.config  import BoolOption, Configuration, ExtensionOption, \
+                         Option, OrderedExtensionsOption
+from trac.core  import Component, ExtensionPoint, Interface, TracError, \
+                       implements
+from trac.perm import IPermissionRequestor
+from trac.web.chrome  import ITemplateProvider
 
 # Import i18n methods.  Fallback modules maintain compatibility to Trac 0.11
 # by keeping Babel optional here.
 try:
-    from trac.util.translation import domain_functions
+    from trac.util.translation  import domain_functions
     add_domain, _, N_, gettext, ngettext, tag_ = \
         domain_functions('acct_mgr', ('add_domain', '_', 'N_', 'gettext',
                                       'ngettext', 'tag_'))
     dgettext = None
 except ImportError:
-    from genshi.builder import tag as tag_
-    from trac.util.translation import gettext
+    from genshi.builder  import tag as tag_
+    from trac.util.translation  import gettext
     _ = gettext
     N_ = lambda text: text
     def add_domain(a,b,c=None):
@@ -48,8 +47,8 @@ except ImportError:
                 pass
         return string
 
-from acct_mgr.model import delete_user, get_user_attribute
-from acct_mgr.model import prime_auth_session, set_user_attribute
+from acct_mgr.model import delete_user, get_user_attribute, \
+                           prime_auth_session, set_user_attribute
 
 
 class IPasswordStore(Interface):
@@ -74,7 +73,7 @@ class IPasswordStore(Interface):
     def has_user(user):
         """Returns whether the user account exists."""
 
-    def set_password(user, password, old_password=None, overwrite=True):
+    def set_password(user, password, old_password = None):
         """Sets the password for the user.
 
         This should create the user account, if it doesn't already exist.
@@ -123,9 +122,6 @@ class IAccountChangeListener(Interface):
     def user_email_verification_requested(user, token):
         """User verification has been requested."""
 
-    def user_registration_approval_required(user):
-        """Account registered, requiring administrative approval."""
-
 
 class IAccountRegistrationInspector(Interface):
     """An interface for Components, that wish to participate in examining
@@ -163,24 +159,23 @@ class AccountManager(Component):
     stores, and if so, then each password store is queried in turn.
     """
 
-    implements(IAccountChangeListener, IPermissionRequestor, IRequestFilter)
+    implements(IAccountChangeListener, IPermissionRequestor)
 
-    change_listeners = ExtensionPoint(IAccountChangeListener)
-    # All checks, not only the configured ones (see self.register_checks).
-    checks = ExtensionPoint(IAccountRegistrationInspector)
-    password_stores = OrderedExtensionsOption(
+    _password_store = OrderedExtensionsOption(
         'account-manager', 'password_store', IPasswordStore,
         include_missing=False,
         doc = N_("Ordered list of password stores, queried in turn."))
-    register_checks = OrderedExtensionsOption(
+    _password_format = Option('account-manager', 'password_format',
+        doc="Legacy option, deprecated since acct_mgr-0.1.2")
+    _register_check = OrderedExtensionsOption(
         'account-manager', 'register_check', IAccountRegistrationInspector,
         default="""BasicCheck, EmailCheck, BotTrapCheck, RegExpCheck,
                  UsernamePermCheck""",
         include_missing=False,
         doc="""Ordered list of IAccountRegistrationInspector's to use for
         registration checks.""")
-    # All stores, not only the configured ones (see self.password_stores).
     stores = ExtensionPoint(IPasswordStore)
+    change_listeners = ExtensionPoint(IAccountChangeListener)
     allow_delete_account = BoolOption(
         'account-manager', 'allow_delete_account', True,
         doc="Allow users to delete their own account.")
@@ -199,6 +194,9 @@ class AccountManager(Component):
             This is most useful to move users to a new password store or
             enforce new store configuration (i.e. changed hash type),
             but should be disabled/unset otherwise.""")
+    verify_email = BoolOption(
+        'account-manager', 'verify_email', True,
+        doc="Verify the email address of Trac users.")
     username_char_blacklist = Option(
         'account-manager', 'username_char_blacklist', ':[]',
         doc="""Always exclude some special characters from usernames.
@@ -219,21 +217,21 @@ class AccountManager(Component):
         expected.
         """
         users = []
-        for store in self.password_stores:
+        for store in self._password_store:
             users.extend(store.get_users())
         return users
 
     def has_user(self, user):
         exists = False
         user = self.handle_username_casing(user)
-        for store in self.password_stores:
+        for store in self._password_store:
             if store.has_user(user):
                 exists = True
                 break
             continue
         return exists
 
-    def set_password(self, user, password, old_password=None, overwrite=True):
+    def set_password(self, user, password, old_password = None):
         user = self.handle_username_casing(user)
         store = self.find_user_store(user)
         if store and not hasattr(store, 'set_password'):
@@ -244,19 +242,8 @@ class AccountManager(Component):
         elif not store:
             store = self.get_supporting_store('set_password')
         if store:
-            try:
-                res = store.set_password(user, password, old_password,
-                                         overwrite)
-            except TypeError:
-                # Support former method signature - overwrite unconditionally.
-                res = None
-                if overwrite or not store.has_user(user):
-                    res = store.set_password(user, password, old_password)
-            if res:
+            if store.set_password(user, password, old_password):
                 self._notify('created', user, password)
-            elif not overwrite:
-                raise TracError(_(
-                    "Password for user %s existed, couldn't create." % user))
             else:
                 self._notify('password_changed', user, password)
         else:
@@ -264,12 +251,11 @@ class AccountManager(Component):
                 """None of the IPasswordStore components listed in the
                 trac.ini supports setting the password or creating users.
                 """))
-        return res
 
     def check_password(self, user, password):
         valid = False
         user = self.handle_username_casing(user)
-        for store in self.password_stores:
+        for store in self._password_store:
             valid = store.check_password(user, password)
             if valid:
                 if valid == True and (self.refresh_passwd == True) and \
@@ -280,7 +266,7 @@ class AccountManager(Component):
 
     def delete_user(self, user):
         user = self.handle_username_casing(user)
-        # Delete credentials from password store.
+        # Delete from password store 
         store = self.find_user_store(user)
         del_method = getattr(store, 'delete_user', None)
         if callable(del_method):
@@ -292,7 +278,7 @@ class AccountManager(Component):
 
     def supports(self, operation):
         try:
-            stores = self.password_stores
+            stores = self.password_store
         except AttributeError:
             return False
         else:
@@ -301,13 +287,30 @@ class AccountManager(Component):
             else:
                 return False
 
+    def password_store(self):
+        try:
+            return self._password_store
+        except AttributeError:
+            # fall back on old "password_format" option
+            fmt = self._password_format
+            for store in self.stores:
+                config_key = getattr(store, 'config_key', None)
+                if config_key is None:
+                    continue
+                if config_key() == fmt:
+                    return [store]
+            # if the "password_format" is not set re-raise the AttributeError
+            raise
+
+    password_store = property(password_store)
+
     def get_supporting_store(self, operation):
         """Returns the IPasswordStore that implements the specified operation.
 
         None is returned if no supporting store can be found.
         """
         supports = False
-        for store in self.password_stores:
+        for store in self.password_store:
             if hasattr(store, operation):
                 supports = True
                 break
@@ -318,7 +321,7 @@ class AccountManager(Component):
     def get_all_supporting_stores(self, operation):
         """Returns a list of stores that implement the specified operation"""
         stores = []
-        for store in self.password_stores:
+        for store in self.password_store:
             if hasattr(store, operation):
                 stores.append(store)
             continue
@@ -331,7 +334,7 @@ class AccountManager(Component):
         returned.
         """
         user_stores = []
-        for store in self.password_stores:
+        for store in self._password_store:
             userlist = store.get_users()
             user_stores.append((store, userlist))
             continue
@@ -353,7 +356,7 @@ class AccountManager(Component):
 
     def validate_registration(self, req):
         """Run configured registration checks and prime account on success."""
-        for inspector in self.register_checks:
+        for inspector in self._register_check:
             inspector.validate_registration(req)
 
         username = self.handle_username_casing(
@@ -361,20 +364,19 @@ class AccountManager(Component):
         name = req.args.get('name').strip()
         email = req.args.get('email', '').strip()
         # Create the user in the configured (primary) password store.
-        if self.set_password(username, req.args.get('password'), None, False):
-            # Result of a successful account creation request is a made-up
-            # authenticated session, that a new user can refer to later on.
-            prime_auth_session(self.env, username)
-            # Save attributes for the user with reference to that session ID.
-            for attribute in ('name', 'email'):
-                value = req.args.get(attribute)
-                if not value:
-                    continue
-                set_user_attribute(self.env, username, attribute, value)
+        self.set_password(username, req.args.get('password'))
+        # Output of a successful account creation request is a made-up
+        # authenticated session, that a new user can refer to later on.
+        prime_auth_session(self.env, username)
+        # Save attributes for the user with reference to that session ID.
+        for attribute in ('name', 'email'):
+            value = req.args.get(attribute)
+            if not value:
+                continue
+            set_user_attribute(self.env, username, attribute, value)
 
     def _maybe_update_hash(self, user, password):
-        if get_user_attribute(self.env, user, 1,
-                              'password_refreshed', 1) == [0]:
+        if not get_user_attribute(self.env, 1, user, 'password_refreshed', 1):
             self.log.debug("Refresh password for user: %s" % user)
             store = self.find_user_store(user)
             pwstore = self.get_supporting_store('set_password')
@@ -406,28 +408,6 @@ class AccountManager(Component):
         
     def user_email_verification_requested(self, user, token):
         self.log.info("Email verification requested for user: %s" % user)
-
-    def user_registration_approval_required(self, user):
-        self.log.info("Registration approval required for user: %s" % user)
-
-    # IRequestFilter methods
-
-    def pre_process_request(self, req, handler):
-        if not req.session.authenticated or \
-                req.perm.has_permission('ACCTMGR_USER_ADMIN'):
-            # Permissions for anonymous and admin users remain unchanged.
-            return handler
-        if 'approval' in req.session:
-            # Account approval not granted, remove elevated permissions.
-            req.perm = PermissionCache(self.env)
-            self.log.debug(
-                "AccountManager.pre_process_request: Permissions for '%s' "
-                "stripped (account approval %s)"
-                % (req.authname, req.session['approval']))
-        return handler
-
-    def post_process_request(self, req, template, data, content_type):
-        return template, data, content_type
 
     # IPermissionRequestor methods
 

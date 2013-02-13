@@ -62,6 +62,7 @@ class AccountModule(CommonTemplateProvider):
         'account-manager', 'generated_password_length', 8,
         """Length of the randomly-generated passwords created when resetting
         the password for an account.""")
+
     reset_password = BoolOption(
         'account-manager', 'reset_password', True,
         'Set to False, if there is no email system setup.')
@@ -72,20 +73,10 @@ class AccountModule(CommonTemplateProvider):
         self._write_check(log=True)
 
     def _write_check(self, log=False):
-        """Returns all configured write-enabled password stores."""
         writable = self.acctmgr.get_all_supporting_stores('set_password')
-        if writable:
-            try:
-                writable = writable.remove(self.store)
-            except ValueError:
-                # ResetPwStore is not enabled.
-                if log:
-                    self.log.warn("ResetPwStore is disabled, therefor "
-                                  "password reset won't work.")
-        # Require at least one more write-enabled password store.
         if not writable and log:
-            self.log.warn("AccountModule is disabled because no configured "
-                          "password store supports writing.")
+            self.log.warn("AccountModule is disabled because the password "
+                          "store does not support writing.")
         return writable
 
     # IPreferencePanelProvider methods
@@ -207,7 +198,7 @@ class AccountModule(CommonTemplateProvider):
                 error = self._reset_password(username, email)
                 return error and error or {'sent_to_email': email}
         return {'error': _(
-            "Email and username must match a known account.")}
+            "The email and username must match a known account.")}
 
     def _reset_password(self, username, email):
         acctmgr = self.acctmgr
