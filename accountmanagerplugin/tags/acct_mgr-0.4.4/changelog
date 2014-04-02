@@ -1,48 +1,6 @@
 Author: Matthew Good <trac@matt-good.net>
 Maintainer: Steffen Hoffmann <hoff.st@web.de>
 
-acct_mgr-0.5 (not yet released) - branch 0.11
- resolved issues
- * #8217: Race condition when creating new accounts
- * #10740: Checkbox columns are too wide on the Accounts: Cleanup page
- * #10754: Selected checkboxes should determine Accounts: Cleanup page items
- * #10772: ProgrammingError: operator does not exist: text = integer
- * #10829: Consider renaming 'Save' buttons to 'Apply changes'
- * #10910: Unable to change full name
- * #11038: Login fails due to issues with opening sibling Trac environments
- * #11090: Error on user creation "gaierror: [Errno -2] Name or service ..."
- * #11111: Please add a MANIFEST.in
- * #11213: The username input doesn't have focus when the page loads
- * #11312: Variable `user' does not exist (in api.py)
- * fix access to account properties clean-up from user admin panel
- * always show associated email in user details admin panel
- * fix and unify web-UI feedback on user and admin actions
- * prevent bypassing email address policy via user preferences
- * add modular user ID change support for Trac core as well as for some other
-   Trac plugins, currently:
-  * AnnouncerPlugin > 0.12.1
-  * ScreenshotsPlugin (all versions)
-  * TracFormsPlugin > v0.2
-  * VotePlugin (all versions)
-
- new features
- * #843: Make admin approval required for account registration
- * #7426: Dynamicity of Trac (Show number of registered users)
- * #8930: Setup wizard for AcctMgr
- * #8595: Ability to ban accounts
- * #10684: Provide feedback when performing actions on the Users page
- * #10739: Move 'Back to Accounts' button to the contextual navigation
- * #10741: Provide email verification status indicator on user admin panel
- * #10742: Rename "Update" button to "Refresh" on Review Account Details page
- * #10745: Add 'Select all' checkbox to header of list in user admin panel
- * #11214: Rename db_cleanup to admin_db_cleanup
- * #11215: Set focus when admin Users page loads
- * add unit tests for db access functions
- * add account guard configuration to config admin panel
- * filter account list in user admin panel by account status
- * remake account editor following Trac admin panel style i.e. for enums
-
-
 acct_mgr-0.4.4 (03-Apr-2014) - branch 0.11
  resolved issues
  * escape email for notification message against reported xss vulnerability
