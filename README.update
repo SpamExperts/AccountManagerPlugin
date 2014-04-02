@@ -9,16 +9,6 @@ Many valuable hints on AccountManager configuration are compiled into
 http://trac-hacks.org/wiki/CookBook/AccountManagerPluginConfiguration
 
 
-Upgrading acct_mgr-0.4.4 -> 0.5
--------------------------------
-The 'password_file' option has been removed from AbstractPasswordFileStore.
-Now each file store implementation must provide its own filename option.
-Likewise 'password_format' is no longer supported for store selection.
-Please specifiy the appropriate class name in 'password_store' instead.
-Note though, that SvnServePasswordStore still uses the ambiguous
-'password_file' so others must avoid it to allow password store chaining.
-
-
 Upgrading acct_mgr-0.4 -> 0.4.1
 -------------------------------
 Run `python ./contrib/fix-session_attribute-failed_logins.py <env>` on any
@@ -33,21 +23,19 @@ provided by AccountManagerPlugin itself.
 
 New configuration options to supersed 'password_file' for affected stores:
 {{{
-#!ini
-[account-manager]
-password_store = HtDigestStore
-# Obsolete entry commented for reference
-#password_file = <abs_path>/.htdigest
-htdigest_file = <abs_path>/.htdigest
+#!diff
+ [account-manager]
+ password_store = HtDigestStore
+-password_file = <abs_path>/.htdigest
++htdigest_file = <abs_path>/.htdigest
 }}}
 
 {{{
-#!ini
-[account-manager]
-password_store = HtPasswdStore
-# Obsolete entry commented for reference
-#password_file = <abs_path>/.htpasswd
-htpasswd_file = <abs_path>/.htpasswd
+#!diff
+ [account-manager]
+ password_store = HtPasswdStore
+-password_file = <abs_path>/.htpasswd
++htpasswd_file = <abs_path>/.htpasswd
 }}}
 
 The password reset procedure has been re-designed from ground to make password
@@ -63,14 +51,12 @@ and before it possibly gets overwritten itself by a newer one of course.
 
 Component rename:
 {{{
-#!ini 
-[components]
-# Obsolete entries commented for reference
-#acct_mgr.admin.accountmanageradminpages
-acct_mgr.admin.accountmanageradminpanel
-
-#acct_mgr.admin.accountchangenotificationadminpage
-acct_mgr.admin.accountchangenotificationadminpanel
+#!diff
+ [components]
+-acct_mgr.admin.accountmanageradminpages
++acct_mgr.admin.accountmanageradminpanel
+-acct_mgr.admin.accountchangenotificationadminpage
++acct_mgr.admin.accountchangenotificationadminpanel
 }}}
 
 New user account registration has been restructured, moved to a separate
@@ -78,14 +64,12 @@ place and even partly rewritten from scratch.
 
 Component move:
 {{{
-#!ini
-[components]
-# Obsolete entries commented for reference
-#acct_mgr.web_ui.emailverificationmodule
-acct_mgr.register.emailverificationmodule
-
-#acct_mgr.web_ui.registrationmodule
-acct_mgr.register.registrationmodule
+#!diff
+ [components]
+-acct_mgr.web_ui.emailverificationmodule
++acct_mgr.register.emailverificationmodule
+-acct_mgr.web_ui.registrationmodule
++acct_mgr.register.registrationmodule
 }}}
 
 `IAccountRegistrationInspector` is the interface, that allows for flexibility
@@ -98,7 +82,7 @@ to actually apply them on subsequent requests (showing default value here):
 {{{
 #!ini
 [account-manager]
-register_check = BasicCheck, EmailCheck, BotTrapCheck, RegExpCheck, UsernamePermCheck
+register_check = BasicCheck, EmailCheck, UsernamePermCheck, RegExpCheck
 }}}
 
 Note: Email has been validated against a hard-coded regular expression before.
@@ -121,11 +105,10 @@ backwards-compatibility with Trac down to 0.11, but still watch out.
 
 Component rename:
 {{{
-#!ini 
-[components]
-# Obsolete entry commented for reference
-#acct_mgr.admin.accountchangenotificationadminpanel
-acct_mgr.admin.accountchangenotificationadminpage
+#!diff
+ [components]
+-acct_mgr.admin.accountchangenotificationadminpanel
++acct_mgr.admin.accountchangenotificationadminpage
 }}}
 
 
@@ -138,11 +121,10 @@ The transition to `0.11` branch has been done early in the process too.
 
 Component rename:
 {{{
-#!ini 
-[components]
-# Obsolete entry commented for reference
-#acct_mgr.admin.accountmanageradminpage
-acct_mgr.admin.accountmanageradminpages
+#!diff
+ [components]
+-acct_mgr.admin.accountmanageradminpage
++acct_mgr.admin.accountmanageradminpages
 }}}
 
 AccountGuard is an new feature with some related options to protect accounts

@@ -55,7 +55,7 @@ class SessionStore(Component):
             return True
         return False
 
-    def set_password(self, user, password, old_password=None, overwrite=True):
+    def set_password(self, user, password, old_password=None):
         """Sets the password for the user.
 
         This should create the user account, if it doesn't already exist.
@@ -72,24 +72,23 @@ class SessionStore(Component):
                 AND name=%s
                 AND sid=%s
             """
-        if overwrite:
-            cursor.execute("""
-                UPDATE  session_attribute
-                    SET value=%s
-                """ + sql, (hash, self.key, user))
+        cursor.execute("""
+            UPDATE  session_attribute
+                SET value=%s
+            """ + sql, (hash, self.key, user))
         cursor.execute("""
             SELECT  value
             FROM    session_attribute
             """ + sql, (self.key, user))
-        exists = cursor.fetchone()
-        if not exists:
+        not_exists = cursor.fetchone() is None
+        if not_exists:
             cursor.execute("""
                 INSERT INTO session_attribute
                         (sid,authenticated,name,value)
                 VALUES  (%s,1,%s,%s)
                 """, (user, self.key, hash))
         db.commit()
-        return not exists
+        return not_exists
 
     def check_password(self, user, password):
         """Checks if the password is valid for the user."""
@@ -137,11 +136,6 @@ class SessionStore(Component):
 
     @property
     def hash_method_enabled(self):
-        """Prevent AttributeError on plugin load.
-
-        This would happen, if the implementation of 'IPasswordHashMethod'
-        interface configured in 'hash_method' has not been enabled.
-        """
         try:
             hash_method = self.hash_method
         except AttributeError:

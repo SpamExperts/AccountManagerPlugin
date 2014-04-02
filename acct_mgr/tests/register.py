@@ -13,22 +13,22 @@ import string
 import tempfile
 import unittest
 
-from Cookie import SimpleCookie as Cookie
-from genshi.core import Markup
+from Cookie  import SimpleCookie as Cookie
+from genshi.core  import Markup
 
-from trac.perm import PermissionCache, PermissionSystem
-from trac.test import EnvironmentStub, Mock, MockPerm
-from trac.web.session import Session
+from trac.perm  import PermissionCache, PermissionSystem
+from trac.test  import EnvironmentStub, Mock, MockPerm
+from trac.web.session  import Session
 
-from acct_mgr.api import AccountManager, IAccountRegistrationInspector
-from acct_mgr.db import SessionStore
-from acct_mgr.htfile import HtPasswdStore
-from acct_mgr.model import set_user_attribute
-from acct_mgr.register import BasicCheck, BotTrapCheck, EmailCheck
-from acct_mgr.register import EmailVerificationModule
-from acct_mgr.register import GenericRegistrationInspector, RegExpCheck
-from acct_mgr.register import RegistrationError, RegistrationModule
-from acct_mgr.register import UsernamePermCheck
+from acct_mgr.api  import AccountManager, IAccountRegistrationInspector
+from acct_mgr.db  import SessionStore
+from acct_mgr.htfile  import HtPasswdStore
+from acct_mgr.model  import set_user_attribute
+from acct_mgr.register  import BasicCheck, BotTrapCheck, EmailCheck, \
+                               EmailVerificationModule, \
+                               GenericRegistrationInspector, RegExpCheck, \
+                               RegistrationError, RegistrationModule, \
+                               UsernamePermCheck
 
 
 class _BaseTestCase(unittest.TestCase):
@@ -43,7 +43,6 @@ class _BaseTestCase(unittest.TestCase):
         # Prepare a generic registration request.
         args = dict(username='', name='', email='')
         self.req = Mock(authname='anonymous', args=args)
-        self.req.path_info = '/register'
         self.req.perm = PermissionCache(self.env)
 
     def tearDown(self):
@@ -170,14 +169,10 @@ class BotTrapCheckTestCase(_BaseTestCase):
         # 2nd attempt: No input.
         req.args['basic_token'] = ''
         self.assertRaises(RegistrationError, check.validate_registration, req)
-        # 3rd attempt: As before, but request done by authenticated user.
-        req = Mock(authname='admin', args=self.req.args)
-        self.assertEqual(check.validate_registration(req), None)
-        # 4th attempt: Finally valid input.
-        req = self.req
+        # 3th attempt: Finally valid input.
         req.args['basic_token'] = self.basic_token
         self.assertEqual(check.validate_registration(req), None)
-        # 5th attempt: Fill the hidden field too.
+        # 4rd attempt: Fill the hidden field too.
         req.args['sentinel'] = "Humans can't see this? Crap - I'm superior!"
         self.assertRaises(RegistrationError, check.validate_registration, req)
 
@@ -299,8 +294,8 @@ class UsernamePermCheckTestCase(_BaseTestCase):
         # 3rd attempt: Explicite permission assigned for that username.
         req.args['username'] = 'admin'
         self.assertRaises(RegistrationError, check.validate_registration, req)
-        # 4th attempt: As before, but request done by authenticated user.
-        req = Mock(authname='admin', args=self.req.args)
+        # 4th attempt: As before, but request done by admin user.
+        req.perm = PermissionCache(self.env, 'admin')
         self.assertEqual(check.validate_registration(req), None)
 
 
@@ -338,7 +333,7 @@ class RegistrationModuleTestCase(_BaseTestCase):
 
         # Custom configuration: No check at all, if you insist.
         self.env.config.set('account-manager', 'register_check', '')
-        self.assertFalse(self.acctmgr.register_checks)
+        self.assertFalse(self.acctmgr._register_check)
         response = self.rmod.process_request(self.req)
         self.assertEqual(response[0], self.reg_template)
 
@@ -355,8 +350,8 @@ class RegistrationModuleTestCase(_BaseTestCase):
                        'password_confirm': passwd
                    },
                    chrome=dict(notices=[], warnings=[]),
-                   href=self.env.abs_href, path_info='/register',
-                   perm=MockPerm(), redirect=lambda x: None
+                   href=self.env.abs_href, perm=MockPerm(),
+                   redirect=lambda x: None
         )
         # Fail to register the user.
         self.rmod.process_request(req)
@@ -380,8 +375,8 @@ class RegistrationModuleTestCase(_BaseTestCase):
                        'password_confirm': passwd
                    },
                    chrome=dict(notices=[], warnings=[]),
-                   href=self.env.abs_href, path_info='/register',
-                   perm=MockPerm(), redirect=redirect_noop
+                   href=self.env.abs_href, perm=MockPerm(),
+                   redirect=redirect_noop
         )
         self.env.config.set('account-manager', 'verify_email', False)
         # Successfully register the user.
@@ -402,10 +397,10 @@ class EmailVerificationModuleTestCase(_BaseTestCase):
                 enable=['trac.*', 'acct_mgr.api.*', 'acct_mgr.register.*'])
         self.env.path = tempfile.mkdtemp()
 
-        args = dict(username='username', name='', email='')
+        args = dict(username='user', name='', email='')
         incookie = Cookie()
         incookie['trac_session'] = '123456'
-        self.req = Mock(authname='username', args=args, base_path='/',
+        self.req = Mock(authname='user', args=args, base_path='/',
                         chrome=dict(warnings=list()),
                         href=Mock(prefs=lambda x: None),
                         incookie=incookie, outcookie=Cookie(),

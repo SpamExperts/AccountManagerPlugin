@@ -1,7 +1,6 @@
 # -*- coding: utf-8 -*-
 #
 # Copyright (C) 2008 Pedro Algarvio <ufs@ufsoft.org>
-# Copyright (C) 2013 Steffen Hoffmann <hoff.st@web.de>
 # All rights reserved.
 #
 # This software is licensed as described in the file COPYING, which
@@ -12,17 +11,13 @@
 import re
 
 from trac import __version__
-from trac.core import Component, TracError, implements
+from trac.core import Component, implements
 from trac.admin import IAdminPanelProvider
 from trac.config import Option, ListOption
 from trac.notification import NotifyEmail
 
 from acct_mgr.api import IAccountChangeListener, CommonTemplateProvider, \
                          _, dgettext
-
-
-class NotificationError(TracError):
-    pass
 
 
 class AccountChangeListener(Component):
@@ -62,10 +57,6 @@ class AccountChangeListener(Component):
         notifier = EmailVerificationNotification(self.env)
         notifier.notify(username, token)
 
-    def user_registration_approval_required(self, username):
-        notifier = EmailVerificationNotification(self.env)
-        notifier.notify(username, 'Registration approval required')
-
 
 class AccountChangeNotification(NotifyEmail):
     template_name = 'user_changes_email.txt'
@@ -93,11 +84,8 @@ class AccountChangeNotification(NotifyEmail):
         projname = self.config.get('project', 'name')
         subject = '[%s] %s: %s' % (projname, action, username)
 
-        try:
-            NotifyEmail.notify(self, username, subject)
-        except Exception, e:
-            # Enable dedicated, graceful handling of notification issues.
-            raise NotificationError(e)
+        NotifyEmail.notify(self, username, subject)
+
 
 class SingleUserNotification(NotifyEmail):
     """Helper class used for account email notifications which should only be
@@ -115,7 +103,7 @@ class SingleUserNotification(NotifyEmail):
         if addr == self._username:
             return NotifyEmail.get_smtp_address(self, addr)
         else:
-            return
+            return None
 
     def notify(self, username, subject):
         # save the username for use in `get_smtp_address`
@@ -125,10 +113,10 @@ class SingleUserNotification(NotifyEmail):
         self.config.set('notification', 'use_public_cc', 'true')
         try:
             NotifyEmail.notify(self, username, subject)
-        except Exception, e:
-            raise NotificationError(e)
         # DEVEL: Better use new 'finally' statement here, but
         #   still need to care for Python 2.4 (RHEL5.x) for now
+        except:
+            pass
         self.config.set('notification', 'use_public_cc', old_public_cc)
 
 
@@ -187,18 +175,19 @@ class AccountChangeNotificationAdminPanel(CommonTemplateProvider):
             return self._do_config(req)
 
     def _do_config(self, req):
-        cfg = self.config
         if req.method == 'POST':
-            cfg.set('account-manager', 'account_changes_notify_addresses',
+            self.config.set(
+                'account-manager', 'account_changes_notify_addresses',
                 ' '.join(req.args.get('notify_addresses').strip('\n').split()))
-            cfg.set('account-manager', 'notify_actions',
+
+            self.config.set('account-manager', 'notify_actions',
                 ','.join(req.args.getlist('notify_actions'))
                 )
-            cfg.save()
-
-        notify_addresses = cfg.get('account-manager',
-                                   'account_changes_notify_addresses').split()
-        notify_actions = cfg.getlist('account-manager', 'notify_actions')
+            self.config.save()
+        notify_addresses = self.config.get(
+            'account-manager', 'account_changes_notify_addresses').split()
+        notify_actions = self.config.getlist('account-manager',
+                                             'notify_actions')
         data = {'_dgettext': dgettext,
                 'notify_actions': notify_actions,
                 'notify_addresses': notify_addresses

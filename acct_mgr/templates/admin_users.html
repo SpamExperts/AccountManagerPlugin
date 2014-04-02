@@ -12,206 +12,94 @@
         dgettext = _dgettext ?>
   <head>
     <title>Accounts</title>
-    <script type="text/javascript"
-            src="${chrome.htdocs_location}js/folding.js"></script>
-    <script type="text/javascript">/*<![CDATA[*/
-      jQuery(document).ready(function($) {
-        // Compatibility: The prop function doesn't exist before jQuery 1.6
-        if(!$.isFunction($.fn.prop)) $.fn.prop = $.fn.attr;
-        // Compatibility: The closest function doesn't exist before jQuery 1.3
-        if(!$.isFunction($.fn.closest)) $.fn.closest = $.fn.parents;
-        // Clear all the checkboxes, to cover the case that the user clicks
-        // the Back button in the browser
-        $("table.listing input:checkbox").prop("checked", false);
-        // Prompt with a confirm dialog when deleting accounts
-        var button_pressed;
-        $("#manage-accounts div.buttons input").click(function() {
-          button_pressed = $(this).attr("name");
-        });
-        $("#manage-accounts").submit(function() {
-          if (button_pressed === "remove")
-            return confirm('${delete_msg_confirm}');
-        })
-        // Disable the submit buttons until at least one checkboxes is checked
-        function setButtonsDisabled(state) {
-          $("#reset").attr("disabled", state);
-          $("#approve").attr("disabled", state);
-          $("#remove").attr("disabled", state);
-          $("#cleanup").attr("disabled", state);
-        }
-        setButtonsDisabled(true);
-        // Add a group toggler checkbox in the header
-        $("table.listing th.sel").html('<input type="checkbox" />').children()
-          .click(function() {
-            $("td.sel input:checkbox", $(this).closest("table.listing"))
-              .prop("checked", this.checked);
-            setButtonsDisabled(!this.checked);
-          });
-        // Toggle the group toggle checkbox and buttons' disable state
-        $("table.listing td.sel input:checkbox").click(function() {
-          var checkboxes = $("input:checkbox", $(this).closest("tbody"));
-          var numChecked = checkboxes.filter(":checked").length;
-          var noneChecked = numChecked === 0;
-          var allChecked = numChecked === checkboxes.length;
-          // Compatibility: the 'indeterminate' can't be set using jQuery's,
-          // 'attr' function, so calling 'prop' wouldn't work with the
-          // compatibility fix that was put in place for 'prop'
-          $("th.sel input:checkbox", $(this).closest("table.listing"))
-            .prop("checked", this.checked)
-            .each(function() {
-              this.indeterminate = !(noneChecked || allChecked);
-            });
-          setButtonsDisabled(noneChecked);
-        });
-        // Hide account filter settings by default
-        $("fieldset legend.foldable").enableFolding(true);
-        // Shrink max_per_page pager preferences after 1st touch
-        $('.holdingbox').hover(function(){
-          $('.panel').stop().animate({height: '6em'}, 250);
-        }, function(){
-          $('.panel').stop().animate({height: '2.4em'}, 1000);
-        });
-        // Set focus on page load
-        $("#username").focus();
-      });
-    /*]]>*/</script>
   </head>
 
   <body>
-    <!--! Account property editor -->
+    <h2>Manage User Accounts</h2>
+
     <form id="account-editor" class="addnew" method="post">
-      <input type="hidden" name="max_per_page"
-             value="${accounts and accounts.max_per_page or None}" />
       <fieldset>
-        <legend>Add New Account:</legend>
+        <div class="system-message" py:if="editor_error">
+          <p>${editor_error}</p>
+        </div>
+        <div class="notice system-message" py:if="success">
+          <p i18n:msg="success">
+            Successfully updated: ${', '.join(success)}
+          </p>
+        </div>
+
+        <legend>Add/Edit Account:</legend>
         <div class="field">
           <label>Username:<br />
             <input type="text" name="username" id="username"
-                   class="textwidget" value="${acctmgr.username}" />
-          </label>
+                   class="textwidget" value="${acctmgr.username}" /></label>
           <p class="hint" py:if="ignore_auth_case"> 
             Only lowercase usernames allowed 
-          </p>
+          </p> 
         </div>
-        <div>
-          <div class="field">
-            <label py:choose="">Password:<br />
-              <input type="password" name="password" class="textwidget"
-                     py:when="create_enabled or password_change_enabled" />
-              <input type="password" name="password" class="textwidget"
-                     py:otherwise="" disabled="disabled" />
-            </label>
-          </div>
-          <div class="field">
-            <label py:choose="">Confirm Password:<br />
-              <input type="password" name="password_confirm"
-                     class="textwidget"
-                     py:when="create_enabled or password_change_enabled" />
-              <input type="password" name="password_confirm"
-                     class="textwidget"
-                     py:otherwise="" disabled="disabled" />
-            </label>
-          </div>
+        <div class="field">
+          <label py:choose="">Password:<br />
+            <input type="password" name="password" class="textwidget"
+                   py:when="create_enabled or password_change_enabled" />
+            <input type="password" name="password" class="textwidget"
+                   py:otherwise="" disabled="disabled" />
+          </label>
+        </div>
+        <div class="field">
+          <label py:choose="">Confirm Password:<br />
+            <input type="password" name="password_confirm" class="textwidget"
+                   py:when="create_enabled or password_change_enabled" />
+            <input type="password" name="password_confirm" class="textwidget"
+                   py:otherwise="" disabled="disabled" />
+          </label>
         </div>
         <div class="field">
           <label>Pre-/Surname (Nickname):<br />
             <input type="text" name="name" class="textwidget"
-                   value="${acctmgr.name}" />
-          </label>
+                   value="${acctmgr.name}" /></label>
         </div>
         <div class="field">
           <label>Email Address:<br />
             <input type="text" name="email" class="textwidget"
-                   value="${acctmgr.email}" />
-          </label><br />
-          <label py:if="verify_enabled">
-            <input type="checkbox" name="email_approved" value="true"
-                   checked="${email_approved and 'checked' or None}" />
-            Skip new email verification
-          </label>
+                   value="${acctmgr.email}" /></label><br />
+            <label py:if="verify_enabled">
+              <input type="checkbox" name="email_approved" value="true"
+                     checked="${email_approved and 'checked' or None}" />
+              Skip new email verification</label>
         </div>
-        <div>
-          <div class="buttons">
-            <input type="submit" name="add" py:if="create_enabled"
-                   value="${dgettext('acct_mgr', ' Add ')}" />
-          </div>
+        <p class="help">Add a new user account or edit an existing one.</p>
+        <div class="buttons">
+          <input type="submit" name="add"
+                 py:if="create_enabled"
+                 value="${dgettext('acct_mgr', ' Add ')}" />
+          <input type="submit" name="change"
+                 value="${dgettext('acct_mgr', ' Change ')}" />
         </div>
       </fieldset>
     </form>
 
-    <div class="system-message" py:if="not listing_enabled">
+    <py:choose>
+    <div class="system-message"
+         py:when="not listing_enabled">
       <p>This password store does not support listing users.</p>
     </div>
-    <div id="accounts" py:if="listing_enabled">
-      <div class="holdingbox">
-        <form class="panel" id="prefs" method="get" action="">
-          <label i18n:msg="">
-            Max accounts per page <input type="text" size="3"
-                                         name="max_per_page"
-                                         value="${accounts.max_per_page}" />
-          </label>
-          <div class="buttons">
-            <input type="submit" value="${dgettext('acct_mgr', 'Update')}" />
-          </div>
-        </form>
+    <form method="post" py:otherwise="" py:strip="not delete_enabled">
+      <div class="system-message"
+           py:if="deletion_error"><p>${deletion_error}</p></div>
+      <xi:include href="user_table.html"/>
+      <div class="buttons">
+        <input type="submit" name="reset"
+               py:if="password_reset_enabled"
+               title="Send another random password"
+               value="${dgettext('acct_mgr', 'Reset passwords')}" />
+        <input type="submit" name="remove"
+               py:if="delete_enabled"
+               value="${dgettext('acct_mgr', 'Remove selected accounts')}" />
+        <input type="submit" name="cleanup"
+               py:if="req.perm.has_permission('ACCTMGR_ADMIN')"
+               value="${dgettext('acct_mgr', 'Review account attributes')}" />
       </div>
-
-      <!--! TRANSLATOR: Position (# to # of #) or total, if not paginating -->
-      <h2 class="report-result">
-        Accounts <span class="trac-count">($displayed_items)</span>
-      </h2>
-
-      <form id="filter" method="get" action="">
-        <input type="hidden" name="max_per_page"
-               value="${accounts.max_per_page}" />
-        <fieldset id="filters">
-          <legend class="foldable">Filters</legend>
-          <table summary="Account filters">
-            <th scope="row">Status</th>
-            <td class="filter">
-              <label class="control" py:for="filter in filters">
-                <input type="checkbox" name="${'filter_%s' % filter.name}"
-                       checked="${filter.enabled or None}"/> ${filter.label}
-              </label>
-            </td>
-            <td>
-              <div class="inlinebuttons">
-                <input type="submit" name="update"
-                       value="${dgettext('acct_mgr', 'Update')}" />
-              </div>
-            </td>
-          </table>
-        </fieldset>
-      </form>
-
-      <form id="manage-accounts" method="post">
-        <xi:include py:with="paginator = accounts" href="page_index.html" />
-        <!--! Main account list -->
-        <xi:include href="user_table.html"/>
-        <xi:include py:with="paginator = accounts" href="page_index.html" />
-
-        <div class="buttons">
-          <input type="hidden" name="max_per_page"
-                 value="${accounts.max_per_page}" />
-          <input type="submit" id="reset" name="reset"
-                 py:if="password_reset_enabled"
-                 title="Send another random password"
-                 value="${dgettext('acct_mgr', 'Reset passwords')}" />
-          <input type="submit" id="approve" name="approve"
-                 title="Approve pending registrations, ban/unban accounts"
-                 value="${dgettext('acct_mgr', 'Toggle account approval')}" />
-          <input type="submit" id="remove" name="remove"
-                 py:if="delete_enabled"
-                 title="Delete accounts"
-                 value="${dgettext('acct_mgr',
-                                   'Remove selected items')}" />
-          <input type="submit" id="cleanup" name="cleanup"
-                 py:if="req.perm.has_permission('ACCTMGR_ADMIN')"
-                 value="${dgettext('acct_mgr',
-                                   'Review account attributes')}" />
-        </div>
-      </form>
-    </div>
-
+    </form>
+    </py:choose>
   </body>
 </html>

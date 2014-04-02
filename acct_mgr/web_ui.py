@@ -25,20 +25,17 @@ from trac.prefs import IPreferencePanelProvider
 from trac.util import hex_entropy
 from trac.util.presentation import separated
 from trac.util.text import to_unicode
-from trac.web import auth
+from trac.web import auth, chrome
 from trac.web.main import IRequestHandler, IRequestFilter, get_environments
-from trac.web.chrome import INavigationContributor, add_notice, add_script
-from trac.web.chrome import add_stylesheet, add_warning
+from trac.web.chrome import INavigationContributor, add_script, add_stylesheet
 
-from acct_mgr.api import AccountManager, CommonTemplateProvider
-from acct_mgr.api import _, dgettext, ngettext, tag_
-from acct_mgr.compat import is_enabled, exception_to_unicode
+from acct_mgr.api import AccountManager, CommonTemplateProvider, \
+                         _, dgettext, ngettext, tag_
 from acct_mgr.db import SessionStore
 from acct_mgr.guard import AccountGuard
 from acct_mgr.model import set_user_attribute, user_known
-from acct_mgr.notification import NotificationError
 from acct_mgr.register import EmailVerificationModule, RegistrationModule
-from acct_mgr.util import if_enabled
+from acct_mgr.util import if_enabled, is_enabled
 
 
 class ResetPwStore(SessionStore):
@@ -65,6 +62,7 @@ class AccountModule(CommonTemplateProvider):
         'account-manager', 'generated_password_length', 8,
         """Length of the randomly-generated passwords created when resetting
         the password for an account.""")
+
     reset_password = BoolOption(
         'account-manager', 'reset_password', True,
         'Set to False, if there is no email system setup.')
@@ -75,21 +73,59 @@ class AccountModule(CommonTemplateProvider):
         self._write_check(log=True)
 
     def _write_check(self, log=False):
-        """Returns all configured write-enabled password stores."""
         writable = self.acctmgr.get_all_supporting_stores('set_password')
-        if writable:
-            try:
-                writable = writable.remove(self.store)
-            except ValueError:
-                # ResetPwStore is not enabled.
-                if log:
-                    self.log.warn("ResetPwStore is disabled, therefor "
-                                  "password reset won't work.")
-        # Require at least one more write-enabled password store.
         if not writable and log:
-            self.log.warn("AccountModule is disabled because no configured "
-                          "password store supports writing.")
+            self.log.warn("AccountModule is disabled because the password "
+                          "store does not support writing.")
         return writable
+
+    # IPreferencePanelProvider methods
+
+    def get_preference_panels(self, req):
+        writable = self._write_check()
+        if not writable:
+            return
+        if req.authname and req.authname != 'anonymous':
+            user_store = self.acctmgr.find_user_store(req.authname)
+            if user_store in writable:
+                yield 'account', _("Account")
+
+    def render_preference_panel(self, req, panel):
+        data = {'account': self._do_account(req),
+                '_dgettext': dgettext,
+               }
+        return 'prefs_account.html', data
+
+    # IRequestHandler methods
+
+    def match_request(self, req):
+        return req.path_info == '/reset_password' and \
+               self._reset_password_enabled(log=True)
+
+    def process_request(self, req):
+        data = {'_dgettext': dgettext,
+                'reset': self._do_reset_password(req)
+               }
+        return 'reset_password.html', data, None
+
+    # IRequestFilter methods
+
+    def pre_process_request(self, req, handler):
+        if req.path_info == '/prefs/account' and \
+                not (req.authname and req.authname != 'anonymous'):
+            # An anonymous session has no account associated with it, and
+            # no account properies too, but general session preferences should
+            # always be available.
+            req.redirect(req.href.prefs())
+        return handler
+
+    def post_process_request(self, req, template, data, content_type):
+        if req.authname and req.authname != 'anonymous':
+            if req.session.get('force_change_passwd', False):
+                redirect_url = req.href.prefs('account')
+                if req.href(req.path_info) != redirect_url:
+                    req.redirect(redirect_url)
+        return (template, data, content_type)
 
     # INavigationContributor methods
 
@@ -115,61 +151,6 @@ class AccountModule(CommonTemplateProvider):
 
     reset_password_enabled = property(_reset_password_enabled)
 
-    # IPreferencePanelProvider methods
-
-    def get_preference_panels(self, req):
-        writable = self._write_check()
-        if not writable:
-            return
-        if req.authname and req.authname != 'anonymous':
-            user_store = self.acctmgr.find_user_store(req.authname)
-            if user_store in writable:
-                yield 'account', _("Account")
-
-    def render_preference_panel(self, req, panel):
-        data = dict(_dgettext=dgettext)
-        data.update(self._do_account(req))
-        return 'prefs_account.html', data
-
-    # IRequestFilter methods
-
-    def pre_process_request(self, req, handler):
-        if req.path_info == '/prefs/account' and \
-                not (req.authname and req.authname != 'anonymous'):
-            # An anonymous session has no account associated with it, and
-            # no account properies too, but general session preferences should
-            # always be available.
-            req.redirect(req.href.prefs())
-        return handler
-
-    def post_process_request(self, req, template, data, content_type):
-        if req.authname and req.authname != 'anonymous':
-            if req.session.get('force_change_passwd', False):
-                # Prevent authenticated usage before another password change.
-                redirect_url = req.href.prefs('account')
-                if req.href(req.path_info) != redirect_url:
-                    req.redirect(redirect_url)
-        return (template, data, content_type)
-
-    # IRequestHandler methods
-
-    def match_request(self, req):
-        return req.path_info == '/reset_password' and \
-               self._reset_password_enabled(log=True)
-
-    def process_request(self, req):
-        data = dict(_dgettext=dgettext)
-        if req.authname and req.authname != 'anonymous':
-            add_notice(req, Markup(tag_(
-                "You're already logged in. If you need to change your "
-                "password please use the %(prefs_href)s page.",
-                prefs_href=tag.a(_("Account Preferences"),
-                                 href=req.href.prefs('account')))))
-            data['authenticated'] = True
-        if req.method == 'POST':
-            self._do_reset_password(req)
-        return 'reset_password.html', data, None
-
     def _do_account(self, req):
         assert(req.authname and req.authname != 'anonymous')
         action = req.args.get('action')
@@ -182,125 +163,97 @@ class AccountModule(CommonTemplateProvider):
         force_change_password = req.session.get('force_change_passwd', False)
         if req.method == 'POST':
             if action == 'save':
-                if self._do_change_password(req) and force_change_password:
-                    del req.session['force_change_passwd']
+                data.update(self._do_change_password(req))
+                if 'message' in data and force_change_password:
+                    del(req.session['force_change_passwd'])
                     req.session.save()
-                    add_notice(req, _("Thank you for taking the time to "
-                                      "update your password."))
+                    chrome.add_notice(req, Markup(tag.span(tag_(
+                        "Thank you for taking the time to update your password."
+                    ))))
                     force_change_password = False
             elif action == 'delete' and delete_enabled:
-                self._do_delete(req)
+                data.update(self._do_delete(req))
+            else:
+                data.update({'error': 'Invalid action'})
         if force_change_password:
-            add_warning(req, Markup(_(
+            chrome.add_warning(req, Markup(tag.span(_(
                 "You are required to change password because of a recent "
-                "password change request. %(invitation)s",
-                invitation=tag.b(_("Please change your password now.")))))
+                "password change request. "),
+                tag.b(_("Please change your password now.")))))
         return data
 
-    def _do_change_password(self, req):
-        username = req.authname
-
-        old_password = req.args.get('old_password')
-        if not self.acctmgr.check_password(username, old_password):
-            if old_password:
-                add_warning(req, _("Old password is incorrect."))
-            else:
-                add_warning(req, _("Old password cannot be empty."))
-            return
-        password = req.args.get('password')
-        if not password:
-            add_warning(req, _("Password cannot be empty."))
-        elif password != req.args.get('password_confirm'):
-            add_warning(req, _("The passwords must match."))
-        elif password == old_password:
-            add_warning(req, _("Password must not match old password."))
-        else:
-            _set_password(self.env, req, username, password, old_password)
-            if req.session.get('password') is not None:
-                # Fetch all session_attributes in case new user password is in
-                # SessionStore, preventing overwrite by session.save().
-                req.session.get_session(req.authname, authenticated=True)
-            add_notice(req, _("Password updated successfully."))
-            return True
-
-    def _do_delete(self, req):
-        username = req.authname
-
-        password = req.args.get('password')
-        if not password:
-            add_warning(req, _("Password cannot be empty."))
-        elif not self.acctmgr.check_password(username, password):
-            add_warning(req, _("Password is incorrect."))
-        else:
-            try:
-                self.acctmgr.delete_user(username)
-            except NotificationError, e:
-                # User wont care for notification, only care for logging here.
-                self.log.error(
-                       'Unable to send account deletion notification: %s',
-                       exception_to_unicode(e, traceback=True))
-            # Delete the whole session, since records in session_attribute
-            # would get restored on logout otherwise.
-            req.session.clear()
-            req.session.save()
-            req.redirect(req.href.logout())
-
     def _do_reset_password(self, req):
-        email = req.args.get('email')
+        if req.authname and req.authname != 'anonymous':
+            return {'logged_in': True}
+        if req.method != 'POST':
+            return {}
         username = req.args.get('username')
+        email = req.args.get('email')
         if not username:
-            add_warning(req, _("Username is required."))
-        elif not email:
-            add_warning(req, _("Email is required."))
-        else:
-            for username_, name, email_ in self.env.get_known_users():
-                if username_ == username and email_ == email:
-                    self._reset_password(req, username, email)
-                    return
-            add_warning(req, _(
-                "Email and username must match a known account."))
+            return {'error': _("Username is required")}
+        if not email:
+            return {'error': _("Email is required")}
+        for username_, name, email_ in self.env.get_known_users():
+            if username_ == username and email_ == email:
+                error = self._reset_password(username, email)
+                return error and error or {'sent_to_email': email}
+        return {'error': _(
+            "The email and username must match a known account.")}
 
-    @property
-    def _random_password(self):
-        """Create a new random password on admin or user request.
-
-        This method is used by acct_mgr.admin.AccountManagerAdminPanel too.
-        """
-        return ''.join([random.choice(self._password_chars)
-                        for _ in xrange(self.password_length)])
-
-    def _reset_password(self, req, username, email):
-        """Store a new, temporary password on admin or user request.
-
-        This method is used by acct_mgr.admin.AccountManagerAdminPanel too.
-        """
+    def _reset_password(self, username, email):
         acctmgr = self.acctmgr
-        new_password = self._random_password
+        new_password = self._random_password()
         try:
             self.store.set_password(username, new_password)
             acctmgr._notify('password_reset', username, email, new_password)
-        except NotificationError, e:
-            msg = _("Error raised while sending a change notification.")
-            if req.path_info.startswith('/admin'):
-                msg += _("You'll get details with TracLogging enabled.")
-            else:
-                msg += _("You should report that issue to a Trac admin.")
-            add_warning(req, msg)
-            self.log.error('Unable to send password reset notification: %s',
-                           exception_to_unicode(e, traceback=True))
         except Exception, e:
-            add_warning(req, _("Cannot reset password: %(error)s",
-                               error=exception_to_unicode(e)))
-            self.log.error('Unable to reset password: %s',
-                           exception_to_unicode(e, traceback=True))
-            return
-        else:
-            # No message, if method has been called from user admin panel.
-            if not req.path_info.startswith('/admin'):
-                add_notice(req, _("A new password has been sent to you at "
-                                  "<%(email)s>.", email=email))
+            return {'error': ','.join(map(to_unicode, e.args))}
         if acctmgr.force_passwd_change:
             set_user_attribute(self.env, username, 'force_change_passwd', 1)
+
+    def _random_password(self):
+        return ''.join([random.choice(self._password_chars)
+                        for _ in xrange(self.password_length)])
+
+    def _do_change_password(self, req):
+        user = req.authname
+
+        old_password = req.args.get('old_password')
+        if not self.acctmgr.check_password(user, old_password):
+            if not old_password:
+                return {'save_error': _("Old password cannot be empty.")}
+            return {'save_error': _("Old password is incorrect.")}
+
+        password = req.args.get('password')
+        if not password:
+            return {'save_error': _("Password cannot be empty.")}
+        if password != req.args.get('password_confirm'):
+            return {'save_error': _("The passwords must match.")}
+        if password == old_password:
+            return {'save_error': _("Password must not match old password.")}
+
+        self.acctmgr.set_password(user, password, old_password)
+        if req.session.get('password') is not None:
+            # Fetch all session_attributes in case new user password is in
+            # SessionStore, to prevent unintended overwrite by session.save().
+            req.session.get_session(req.authname, authenticated=True)
+        return {'message': _("Password successfully updated.")}
+
+    def _do_delete(self, req):
+        user = req.authname
+
+        password = req.args.get('password')
+        if not password:
+            return {'delete_error': _("Password cannot be empty.")}
+        if not self.acctmgr.check_password(user, password):
+            return {'delete_error': _("Password is incorrect.")}
+
+        self.acctmgr.delete_user(user)
+        # Delete the whole session since records in session_attribute would
+        # get restored on logout otherwise.
+        req.session.clear()
+        req.session.save()
+        req.redirect(req.href.logout())
 
 
 class LoginModule(auth.LoginModule, CommonTemplateProvider):
@@ -349,9 +302,8 @@ class LoginModule(auth.LoginModule, CommonTemplateProvider):
 
     environ_auth_overwrite = BoolOption(
         'account-manager', 'environ_auth_overwrite', True,
-        """Whether environment variable REMOTE_USER should get overwritten
-        after processing login form input. Otherwise it will only be set,
-        if unset at the time of authentication.""")
+        """Whether environment variable REMOTE_USER should get overwritten after processing login
+        form input. Otherwise it will only be set, if unset at the time of authentication.""")
 
     # Update cookies for persistant sessions only 1/day.
     #   hex_entropy returns 32 chars per call equal to 128 bit of entropy,
@@ -362,17 +314,14 @@ class LoginModule(auth.LoginModule, CommonTemplateProvider):
     UPDATE_INTERVAL = 86400
 
     def __init__(self):
-        cfg = self.config
+        c = self.config
         if is_enabled(self.env, self.__class__) and \
                 is_enabled(self.env, auth.LoginModule):
             # Disable auth.LoginModule to handle login requests alone.
             self.env.log.info("Concurrent enabled login modules found, "
                               "fixing configuration ...")
-            cfg.set('components', 'trac.web.auth.loginmodule', 'disabled')
-            # Changes are intentionally not written to file for persistence.
-            # This could cause the environment to reload a bit too early, even
-            # interrupting a rewrite in progress by another thread and causing
-            # a DoS condition by truncating the configuration file.
+            c.set('components', 'trac.web.auth.loginmodule', 'disabled')
+            c.save()
             self.env.log.info("trac.web.auth.LoginModule disabled, "
                               "giving preference to %s." % self.__class__)
 
@@ -381,17 +330,18 @@ class LoginModule(auth.LoginModule, CommonTemplateProvider):
             # Set the session to expire after some time and not
             #   when the browser is closed - what is Trac core default).
             self.cookie_lifetime = 86400 * 30   # AcctMgr default = 30 days
+        self.auth_share_participants = []
 
     def authenticate(self, req):
         if req.method == 'POST' and req.path_info.startswith('/login') and \
                 req.args.get('user_locked') is None:
-            username = self._remote_user(req)
+            user = self._remote_user(req)
             acctmgr = AccountManager(self.env)
             guard = AccountGuard(self.env)
             if guard.login_attempt_max_count > 0:
-                if username is None:
+                if user is None:
                     # Get user for failed authentication attempt.
-                    f_user = req.args.get('username')
+                    f_user = req.args.get('user')
                     req.args['user_locked'] = False
                     # Log current failed login attempt.
                     guard.failed_count(f_user, req.remote_addr)
@@ -399,16 +349,16 @@ class LoginModule(auth.LoginModule, CommonTemplateProvider):
                         # Step up lock time prolongation only while locked.
                         guard.lock_count(f_user, 'up')
                         req.args['user_locked'] = True
-                elif guard.user_locked(username):
+                elif guard.user_locked(user):
                     req.args['user_locked'] = True
                     # Void successful login as long as user is locked.
-                    username = None
+                    user = None
                 else:
                     req.args['user_locked'] = False
                     if req.args.get('failed_logins') is None:
                         # Reset failed login attempts counter.
-                        req.args['failed_logins'] = guard.failed_count(
-                                                        username, reset=True)
+                        req.args['failed_logins'] = guard.failed_count(user,
+                                                                 reset=True)
             else:
                 req.args['user_locked'] = False
             if not 'REMOTE_USER' in req.environ or self.environ_auth_overwrite:
@@ -419,8 +369,8 @@ class LoginModule(auth.LoginModule, CommonTemplateProvider):
                                       "'REMOTE_USER' was set to '%s'"
                                       % req.environ['REMOTE_USER'])
                 self.env.log.debug("LoginModule.authenticate: Set "
-                                   "'REMOTE_USER' = '%s'" % username)
-                req.environ['REMOTE_USER'] = username
+                                   "'REMOTE_USER' = '%s'" % user)
+                req.environ['REMOTE_USER'] = user
         return auth.LoginModule.authenticate(self, req)
 
     authenticate = if_enabled(authenticate)
@@ -456,7 +406,7 @@ class LoginModule(auth.LoginModule, CommonTemplateProvider):
                     # TRANSLATOR: Intentionally obfuscated login error
                     data['login_error'] = _("Invalid username or password")
                 else:
-                    f_user = req.args.get('username')
+                    f_user = req.args.get('user')
                     release_time = AccountGuard(self.env
                                    ).pretty_release_time(req, f_user)
                     if not release_time is None:
@@ -470,7 +420,7 @@ class LoginModule(auth.LoginModule, CommonTemplateProvider):
         else:
             n_plural=req.args.get('failed_logins')
             if n_plural > 0:
-                add_warning(req, Markup(tag.span(tag(ngettext(
+                chrome.add_warning(req, Markup(tag.span(tag(ngettext(
                     "Login after %(attempts)s failed attempt",
                     "Login after %(attempts)s failed attempts",
                     n_plural, attempts=n_plural
@@ -479,32 +429,28 @@ class LoginModule(auth.LoginModule, CommonTemplateProvider):
 
     # overrides
     def _get_name_for_cookie(self, req, cookie):
-        """Returns the username for the current Trac session.
+        """Returns the user name for the current Trac session.
 
         It's called by authenticate() when the cookie 'trac_auth' is sent
         by the browser.
         """
 
         acctmgr = AccountManager(self.env)
-        name = None
-        # Replicate _get_name_for_cookie() or _cookie_to_name() since Trac 1.0
-        # adding special handling of persistent sessions, as the user may have
-        # a dynamic IP adress and this would lead to the user being logged out
-        # due to an IP address conflict.
-        if 'trac_auth_session' in req.incookie or True:
-            db = self.env.get_db_cnx()
-            cursor = db.cursor()
-            sql = "SELECT name FROM auth_cookie WHERE cookie=%s AND ipnr=%s"
-            args = (cookie.value, req.remote_addr)
-            if acctmgr.persistent_sessions or not self.check_ip:
-                sql = "SELECT name FROM auth_cookie WHERE cookie=%s"
-                args = (cookie.value,)
-            cursor.execute(sql, args)
-            name = cursor.fetchone()
-            name = name and name[0] or None
-        if name is None:
-            self._expire_cookie(req)
 
+        # Disable IP checking when a persistent session is available, as the
+        # user may have a dynamic IP adress and this would lead to the user 
+        # being logged out due to an IP address conflict.
+        checkIPSetting = self.check_ip and acctmgr.persistent_sessions and \
+                         'trac_auth_session' in req.incookie
+        if checkIPSetting:
+            self.env.config.set('trac', 'check_auth_ip', False)
+        
+        name = auth.LoginModule._get_name_for_cookie(self, req, cookie)
+        
+        if checkIPSetting:
+            # Re-enable IP checking
+            self.env.config.set('trac', 'check_auth_ip', True)
+        
         if acctmgr.persistent_sessions and name and \
                 'trac_auth_session' in req.incookie and \
                 int(req.incookie['trac_auth_session'].value) < \
@@ -546,8 +492,7 @@ class LoginModule(auth.LoginModule, CommonTemplateProvider):
                     WHERE   cookie=%s
                     """, (cookie.value, old_cookie))
                 db.commit()
-                if self.auth_cookie_path:
-                    self._distribute_auth(req, cookie.value, name)
+                self._distribute_cookie(req, cookie.value)
 
             cookie_lifetime = self.cookie_lifetime
             cookie_path = self._get_cookie_path(req)
@@ -590,8 +535,8 @@ class LoginModule(auth.LoginModule, CommonTemplateProvider):
         req.outcookie['trac_auth']['path'] = cookie_path
         # Inspect current cookie and try auth data distribution for SSO.
         cookie = req.outcookie.get('trac_auth')
-        if cookie and self.auth_cookie_path:
-            self._distribute_auth(req, cookie.value, req.remote_user)
+        if cookie:
+            self._distribute_cookie(req, cookie.value)
 
         if req.args.get('rememberme', '0') == '1':
             # Check for properties to be set in auth cookie.
@@ -628,51 +573,42 @@ class LoginModule(auth.LoginModule, CommonTemplateProvider):
                 self._expire_session_cookie(req)
         return res
 
-    def _distribute_auth(self, req, trac_auth, name=None):
+    def _distribute_cookie(self, req, trac_auth):
         # Single Sign On authentication distribution between multiple
         #   Trac environments managed by AccountManager.
-        local_environ = req.environ.get('SCRIPT_NAME', '').lstrip('/')
+        all_envs = get_environments(req.environ)
+        local_environ = req.environ.get('SCRIPT_NAME', None)
+        self.auth_share_participants = []
 
-        for environ, path in get_environments(req.environ).iteritems():
-            if environ != local_environ:
-                try:
-                    # Cache environment for subsequent invocations.
-                    env = open_environment(path, use_cache=True)
-                    auth_cookie_path = env.config.get('trac',
-                                                      'auth_cookie_path')
-                    # Consider only Trac environments with equal, non-default
-                    #   'auth_cookie_path', which enables cookies to be shared.
-                    if auth_cookie_path == self.auth_cookie_path:
-                        db = env.get_db_cnx()
-                        cursor = db.cursor()
-                        # Authentication cookie values must be unique. Ensure,
-                        #   there is no other session (or worst: session ID)
-                        #   associated to it.
-                        cursor.execute("""
-                            DELETE FROM auth_cookie
-                            WHERE  cookie=%s
-                            """, (trac_auth,))
-                        if not name:
-                            db.commit()
-                            env.log.debug('Auth data revoked from: %s'
-                                          % local_environ)
-                            continue
-                        cursor.execute("""
-                            INSERT INTO auth_cookie
-                                   (cookie,name,ipnr,time)
-                            VALUES (%s,%s,%s,%s)
-                            """, (trac_auth, name, req.remote_addr,
-                                  int(time.time())))
-                        db.commit()
-                        env.log.debug('Auth data received from: %s'
-                                      % local_environ)
-                        self.log.debug('Auth distribution success: %s'
-                                       % environ)
-                except Exception, e:
-                    self.log.debug('Auth distribution skipped for env %s: %s'
-                                   % (environ,
-                                      exception_to_unicode(e, traceback=True))
-                    )
+        for environ, path in all_envs.iteritems():
+            if not environ == local_environ.lstrip('/'):
+                # Cache environment for subsequent invocations.
+                env = open_environment(path, use_cache=True)
+                # Consider only Trac environments with equal, non-default
+                #   'auth_cookie_path', which enables cookies to be shared.
+                if self._get_cookie_path(req) == self.auth_cookie_path:
+                    db = env.get_db_cnx()
+                    cursor = db.cursor()
+                    # Authentication cookie values must be unique. Ensure,
+                    #   there is no other session (or worst: session ID)
+                    #   associated to it.
+                    cursor.execute("""
+                        DELETE FROM auth_cookie
+                        WHERE  cookie=%s
+                        """, (trac_auth,))
+                    cursor.execute("""
+                        INSERT INTO auth_cookie
+                               (cookie,name,ipnr,time)
+                        VALUES (%s,%s,%s,%s)
+                        """, (trac_auth, req.remote_user, req.remote_addr,
+                              int(time.time())))
+                    db.commit()
+                    env.log.debug('Auth data received from: ' + local_environ)
+                    # Track env paths for easier auth revocation later on.
+                    self.auth_share_participants.append(path)
+                    self.log.debug('Auth distribution success: ' + environ)
+                else:
+                    self.log.debug('Auth distribution skipped: ' + environ)
 
     def _get_cookie_path(self, req):
         """Determine "path" cookie property from setting or request object."""
@@ -698,8 +634,18 @@ class LoginModule(auth.LoginModule, CommonTemplateProvider):
         # Then let auth.LoginModule expire all other cookies.
         auth.LoginModule._expire_cookie(self, req)
         # And finally revoke distributed authentication data too.
-        if self.auth_cookie_path and trac_auth:
-            self._distribute_auth(req, trac_auth)
+        if trac_auth:
+            for path in self.auth_share_participants:
+                env = open_environment(path, use_cache=True)
+                db = env.get_db_cnx()
+                cursor = db.cursor()
+                cursor.execute("""
+                    DELETE FROM auth_cookie
+                    WHERE  cookie=%s
+                    """, (trac_auth,))
+                db.commit()
+                env.log.debug('Auth data revoked from: ' + \
+                              req.environ.get('SCRIPT_NAME', 'unknown'))
 
     # Keep this code in a separate methode to be able to expire the session
     # cookie trac_auth_session independently of the trac_auth cookie.
@@ -724,11 +670,10 @@ class LoginModule(auth.LoginModule, CommonTemplateProvider):
 
     def _remote_user(self, req):
         """The real authentication using configured providers and stores."""
-        username = req.args.get('username')
-        self.env.log.debug("LoginModule._remote_user: Authentication "
-                           "attempted for '%s'" % username)
+        user = req.args.get('user')
+        self.env.log.debug("LoginModule._remote_user: Authentication attempted for '%s'" % user)
         password = req.args.get('password')
-        if not username:
+        if not user:
             return None
         acctmgr = AccountManager(self.env)
         acctmod = AccountModule(self.env)
@@ -736,12 +681,12 @@ class LoginModule(auth.LoginModule, CommonTemplateProvider):
             reset_store = acctmod.store
         else:
             reset_store = None
-        if acctmgr.check_password(username, password) == True:
+        if acctmgr.check_password(user, password) == True:
             if reset_store:
                 # Purge any temporary password set for this user before,
                 # to avoid DOS by continuously triggered resets from
                 # a malicious third party.
-                if reset_store.delete_user(username) == True and \
+                if reset_store.delete_user(user) == True and \
                         'PASSWORD_RESET' not in req.environ:
                     db = self.env.get_db_cnx()
                     cursor = db.cursor()
@@ -751,19 +696,19 @@ class LoginModule(auth.LoginModule, CommonTemplateProvider):
                         WHERE   sid=%s
                             AND name='force_change_passwd'
                             AND authenticated=1
-                        """, (username,))
+                        """, (user,))
                     db.commit()
-            return username
+            return user
         # Alternative authentication provided by password reset procedure
         elif reset_store:
-            if reset_store.check_password(username, password) == True:
+            if reset_store.check_password(user, password) == True:
                 # Lock, required to prevent another authentication
                 # (spawned by `set_password()`) from possibly deleting
                 # a 'force_change_passwd' db entry for this user.
-                req.environ['PASSWORD_RESET'] = username
+                req.environ['PASSWORD_RESET'] = user
                 # Change password to temporary password from reset procedure
-                _set_password(self.env, req, username, password)
-                return username
+                acctmgr.set_password(user, password)
+                return user
         return None
 
     def _format_ctxtnav(self, items):
@@ -776,14 +721,3 @@ class LoginModule(auth.LoginModule, CommonTemplateProvider):
                 not is_enabled(self.env, auth.LoginModule)
 
     enabled = property(enabled)
-
-def _set_password(env, req, username, password, old_password=None):
-    try:
-        AccountManager(env).set_password(username, password,
-                                         old_password=old_password)
-    except NotificationError, e:
-        add_warning(req, _("Error raised while sending a change "
-                           "notification.") + _("You should report "
-                           "that issue to a Trac admin."))
-        env.log.error('Unable to send password change notification: %s',
-                      exception_to_unicode(e, traceback=True))

@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 #
 # Copyright (C) 2005 Matthew Good <trac@matt-good.net>
-# Copyright (C) 2010-2013 Steffen Hoffmann <hoff.st@web.de>
+# Copyright (C) 2010-2012 Steffen Hoffmann <hoff.st@web.de>
 # Copyright (C) 2011 Edgewall Software
 # All rights reserved.
 #
@@ -13,22 +13,13 @@
 import os
 import sys
 
+from genshi.builder import tag
+
 from trac.config import Option
 from trac.util.datefmt import format_datetime, pretty_timedelta
-from trac.util.datefmt import to_datetime, utc
+from trac.web.chrome import Chrome
 
-from acct_mgr.api import _, ngettext
-
-
-class EnvRelativePathOption(Option):
-
-    def __get__(self, instance, owner):
-        if instance is None:
-            return self
-        path = super(EnvRelativePathOption, self).__get__(instance, owner)
-        if not path:
-            return path
-        return os.path.normpath(os.path.join(instance.env.path, path))
+from acct_mgr.api import _
 
 
 # Fix for issue http://bugs.python.org/issue8797 in Python 2.6
@@ -66,6 +57,16 @@ else:
     from urllib2 import HTTPBasicAuthHandler
 
 
+class EnvRelativePathOption(Option):
+
+    def __get__(self, instance, owner):
+        if instance is None:
+            return self
+        path = super(EnvRelativePathOption, self).__get__(instance, owner)
+        if not path:
+            return path
+        return os.path.normpath(os.path.join(instance.env.path, path))
+
 # taken from a comment of Horst Hansen
 # at http://code.activestate.com/recipes/65441
 def containsAny(str, set):
@@ -81,44 +82,42 @@ def if_enabled(func):
         return func(self, *args, **kwds)
     return wrap
 
-def pretty_precise_timedelta(time1, time2=None, resolution=None, diff=0):
-    """Calculate time delta between two `datetime` objects and format
-    for pretty-printing.
+# Compatibility code for `ComponentManager.is_enabled`
+# (available since Trac 0.12)
+def is_enabled(env, cls):
+    """Return whether the given component class is enabled.
 
-    If either `time1` or `time2` is None, the current time will be used
-    instead.  Extending the signature of trac.util.datefmt.pretty_timedelta
-    pre-calculated timedeltas may be specified by the alternative `diff`
-    keyword argument that takes precedence if used.
+    For Trac 0.11 the missing algorithm is included as fallback.
     """
-    if diff:
-        age_s = diff
-    else:
-        time1 = to_datetime(time1)
-        time2 = to_datetime(time2)
-        if time1 > time2:
-            time2, time1 = time1, time2
-        diff = time2 - time1
-        age_s = int(diff.days * 86400 + diff.seconds)
-    age_d = age_s // 86400
+    try:
+        return env.is_enabled(cls)
+    except AttributeError:
+        if cls not in env.enabled:
+            env.enabled[cls] = env.is_component_enabled(cls)
+        return env.enabled[cls]
 
-    # DEVEL: Always reduce resolution as required by `resolution` argument.
-    if resolution:
-        if age_s < resolution:
-            return _("less than %s"
-                     % pretty_precise_timedelta(None, diff=resolution))
-    # Get a compact string by stripping non-significant parts.
-    if age_s == 0:
-        return ''
-    # Show seconds for small time values, even in timedeltas > 1 day.
-    t = age_s - age_d * 86400
-    if t > 0 and t < 120:
-        t = ngettext('%(num)i second', '%(num)i seconds', t)
-        if age_d == 0:
-            return t
-    elif age_d != age_s / 86400.0:
-        t = format_datetime(age_s - age_d * 86400, format='%X', tzinfo=utc)
-        if age_d == 0:
-            return t
-    # TRANSLATOR: Pretty datetime representation, time part provided by string substitution.
-    return (ngettext("%(num)i day %%s", "%(num)i days %%s", age_d)
-            % (str(t) != '0' and t or '')).rstrip()
+# Compatibility code for `pretty_dateinfo` from template data dict
+# (available since Trac 0.13)
+def get_pretty_dateinfo(env, req):
+    """Return the function defined in trac.web.chrome.Chrome.populate_data .
+
+    For Trac 0.11 and 0.12 it still provides a slightly simplified version.
+    """
+    # Function is not a class attribute, must be extracted from data dict.
+    fn = Chrome(env).populate_data(req, {}).get('pretty_dateinfo')
+    if not fn:
+        def _pretty_dateinfo(date, format=None, dateonly=False):
+            absolute = format_datetime(date, tzinfo=req.tz)
+            relative = pretty_timedelta(date)
+            if format == 'absolute':
+                label = absolute
+                # TRANSLATOR: Sync with same msgid in Trac 0.13, please.
+                title = _("%(relativetime)s ago", relativetime=relative)
+            else:
+                if dateonly:
+                    label = relative
+                else:
+                    label = _("%(relativetime)s ago", relativetime=relative)
+                title = absolute
+            return tag.span(label, title=title)
+    return fn and fn or _pretty_dateinfo

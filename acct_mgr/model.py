@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 #
-# Copyright (C) 2012-2014 Steffen Hoffmann <hoff.st@web.de>
+# Copyright (C) 2012 Steffen Hoffmann <hoff.st@web.de>
 # All rights reserved.
 #
 # This software is licensed as described in the file COPYING, which
@@ -8,303 +8,12 @@
 #
 # Author: Steffen Hoffmann <hoff.st@web.de>
 
-import re
-
-from trac.core import TracError
-from trac.db.api import DatabaseManager
-from trac.util.text import to_unicode
-
-from acct_mgr.api import GenericUserIdChanger
-from acct_mgr.compat import as_int, exception_to_unicode
-from acct_mgr.hashlib_compat import md5
-
+from acct_mgr.hashlib_compat  import md5
 
 _USER_KEYS = {
     'auth_cookie': 'name',
     'permission': 'username',
     }
-
-
-def _db_exc(env):
-    """Return an object (typically a module) containing all the
-    backend-specific exception types as attributes, named
-    according to the Python Database API
-    (http://www.python.org/dev/peps/pep-0249/).
-
-    This is derived from code found in trac.env.Environment.db_exc (Trac 1.0).
-    """
-    try:
-        module = DatabaseManager(env).get_exceptions()
-    except AttributeError:
-        module = None
-        if dburi.startswith('sqlite:'):
-            try:
-                import pysqlite2.dbapi2 as sqlite
-                module = sqlite
-            except ImportError:
-                try:
-                    import sqlite3 as sqlite
-                    module = sqlite
-                except ImportError:
-                    pass
-        elif dburi.startswith('postgres:'):
-            try:
-                import psycopg2 as psycopg
-                module = psycopg
-            except ImportError:
-                pass
-        elif dburi.startswith('mysql:'):
-            try:
-                import MySQLdb
-                module = MySQLdb
-            except ImportError:
-                pass
-        # Do not need more alternatives, because otherwise we wont get here.
-    return module
-
-def _get_cc_list(cc_value):
-    """Parse cc list.
-
-    Derived from from trac.ticket.model._fixup_cc_list (Trac-1.0).
-    """
-    cclist = []
-    for cc in re.split(r'[;,\s]+', cc_value):
-        if cc and cc not in cclist:
-            cclist.append(cc)
-    return cclist
-
-def _get_db_exc(env):
-    return (_db_exc(env).InternalError, _db_exc(env).OperationalError,
-            _db_exc(env).ProgrammingError)
-
-
-class PrimitiveUserIdChanger(GenericUserIdChanger):
-    """Handle the simple owner-column replacement case."""
-
-    abstract = True
-
-    column = 'author'
-    table = None
-
-    # IUserIdChanger method
-    def replace(self, old_uid, new_uid, db):
-        result = 0
-
-        cursor = db.cursor()
-        try:
-            cursor.execute("SELECT COUNT(*) FROM %s WHERE %s=%%s"
-                           % (self.table, self.column), (old_uid,))
-            exists = cursor.fetchone()
-            if exists[0]:
-                cursor.execute("UPDATE %s SET %s=%%s WHERE %s=%%s"
-                               % (self.table, self.column, self.column),
-                               (new_uid, old_uid))
-                result = int(exists[0])
-                self.log.debug(self.msg(old_uid, new_uid, self.table,
-                               self.column, result='%s time(s)' % result))
-        except (_get_db_exc(self.env)), e:
-            result = exception_to_unicode(e)
-            self.log.debug(self.msg(old_uid, new_uid, self.table,
-                           self.column, result='failed: %s'
-                           % exception_to_unicode(e, traceback=True)))
-            return dict(error={(self.table, self.column, None): result})
-        return {(self.table, self.column, None): result}
-
-
-class UniqueUserIdChanger(PrimitiveUserIdChanger):
-    """Handle columns, where user IDs are an unique key or part of it."""
-
-    abstract = True
-
-    column = 'sid'
-
-    # IUserIdChanger method
-    def replace(self, old_uid, new_uid, db):
-        cursor = db.cursor()
-        try:
-            cursor.execute("DELETE FROM %s WHERE %s=%%s"
-                           % (self.table, self.column), (new_uid,))
-        except (_get_db_exc(self.env)), e:
-            result = exception_to_unicode(e)
-            self.log.debug(self.msg(old_uid, new_uid, self.table,
-                           self.column, result='failed: %s'
-                           % exception_to_unicode(e, traceback=True)))
-            return dict(error={(self.table, self.column, None): result})
-        return super(UniqueUserIdChanger,
-                     self).replace(old_uid, new_uid, db)
-
-
-class AttachmentUserIdChanger(PrimitiveUserIdChanger):
-    """Change user IDs in attachments."""
-
-    table = 'attachment'
-
-
-class AuthCookieUserIdChanger(UniqueUserIdChanger):
-    """Change user IDs for authentication cookies."""
-
-    column = 'name'
-    table = 'auth_cookie'
-
-
-class ComponentUserIdChanger(PrimitiveUserIdChanger):
-    """Change user IDs in components."""
-
-    column = 'owner'
-    table = 'component'
-
-
-class PermissionUserIdChanger(UniqueUserIdChanger):
-    """Change user IDs for permissions."""
-
-    column = 'username'
-    table = 'permission'
-
-
-class ReportUserIdChanger(PrimitiveUserIdChanger):
-    """Change user IDs in reports."""
-
-    table = 'report'
-
-
-class RevisionUserIdChanger(PrimitiveUserIdChanger):
-    """Change user IDs in changesets."""
-
-    table = 'revision'
-
-
-class TicketUserIdChanger(PrimitiveUserIdChanger):
-    """Change all user IDs in tickets."""
-
-    table = 'ticket'
-
-    # IUserIdChanger method
-    def replace(self, old_uid, new_uid, db):
-        results=dict()
-
-        self.column = 'owner'
-        result = super(TicketUserIdChanger,
-                       self).replace(old_uid, new_uid, db)
-        if 'error' in result:
-            return result
-        results.update(result)
-
-        self.column = 'reporter'
-        result = super(TicketUserIdChanger,
-                       self).replace(old_uid, new_uid, db)
-        if 'error' in result:
-            return result
-        results.update(result)
-
-        # Replace user ID in Cc ticket column.
-        cursor = db.cursor()
-        cursor.execute("SELECT id,cc FROM ticket WHERE cc %s" % db.like(),
-                       ('%' + db.like_escape(old_uid) + '%',))
-        result = 0
-        for row in cursor.fetchall():
-            cc = _get_cc_list(row[1])
-            for i in [i for i,r in enumerate(cc) if r == old_uid]:
-                cc[i] = new_uid
-                try:
-                    cursor.execute("UPDATE ticket SET cc=%s WHERE id=%s",
-                                   (', '.join(cc), int(row[0])))
-                    result += 1
-                except (_get_db_exc(self.env)), e:
-                    result = exception_to_unicode(e)
-                    self.log.debug(self.msg(old_uid, new_uid, self.table, 'cc',
-                                   result='failed: %s'
-                                   % exception_to_unicode(e, traceback=True)))
-                    return dict(error={(self.table, 'cc', None): result})
-        self.log.debug(self.msg(old_uid, new_uid, self.table, 'cc',
-                                result='%s time(s)' % result))
-        results.update({(self.table, 'cc', None): result})
-
-        table = 'ticket_change'
-        self.column = 'author'
-        self.table = table
-        result = super(TicketUserIdChanger,
-                       self).replace(old_uid, new_uid, db)
-        if 'error' in result:
-            return result
-        results.update(result)
-
-        constraint = "field='owner'|'reporter'"
-        cursor = db.cursor()
-        for column in ('oldvalue', 'newvalue'):
-            cursor.execute("""
-                SELECT COUNT(*)
-                  FROM %s
-                 WHERE %s=%%s
-                   AND (field='owner'
-                        OR field='reporter')
-            """ % (table, column), (old_uid,))
-            exists = cursor.fetchone()
-            result = int(exists[0])
-            if exists[0]:
-                try:
-                    cursor.execute("""
-                        UPDATE %s
-                           SET %s=%%s
-                         WHERE %s=%%s
-                           AND (field='owner'
-                                OR field='reporter')
-                    """ % (table, column, column), (new_uid, old_uid))
-                except (_get_db_exc(self.env)), e:
-                    result = exception_to_unicode(e)
-                    self.log.debug(
-                        self.msg(old_uid, new_uid, table, column,
-                                 constraint, result='failed: %s'
-                                 % exception_to_unicode(e, traceback=True)))
-                    return dict(error={(self.table, column,
-                                        constraint): result})
-            self.log.debug(self.msg(old_uid, new_uid, table, column,
-                                    constraint, result='%s time(s)' % result))
-            results.update({(table, column, constraint): result})
-
-        # Replace user ID in Cc ticket field changes too.
-        constraint = "field='cc'"
-        for column in ('oldvalue', 'newvalue'):
-            cursor.execute("""
-                SELECT ticket,time,%s
-                  FROM %s
-                 WHERE field='cc'
-                   AND %s %s
-            """ % (column, table, column, db.like()),
-                ('%' + db.like_escape(old_uid) + '%',))
-
-            result = 0
-            for row in cursor.fetchall():
-                cc = _get_cc_list(row[2])
-                for i in [i for i,r in enumerate(cc) if r == old_uid]:
-                    cc[i] = new_uid
-                    try:
-                        cursor.execute("""
-                            UPDATE %s
-                               SET %s=%%s
-                             WHERE ticket=%%s
-                               AND time=%%s
-                        """ % (table, column),
-                            (', '.join(cc), int(row[0]), int(row[1])))
-                        result += 1
-                    except (_get_db_exc(self.env)), e:
-                        result = exception_to_unicode(e)
-                        self.log.debug(
-                            self.msg(old_uid, new_uid, table, column,
-                                     constraint, result='failed: %s'
-                                     % exception_to_unicode(e, traceback=True)
-                        ))
-                        return dict(error={(self.table, column,
-                                            constraint): result})
-            self.log.debug(self.msg(old_uid, new_uid, table, column,
-                                    constraint, result='%s time(s)' % result))
-            results.update({(table, column, constraint): result})
-        return results
-
-
-class WikiUserIdChanger(PrimitiveUserIdChanger):
-    """Change user IDs in wiki pages."""
-
-    table = 'wiki'
 
 
 # Public functions
@@ -374,86 +83,6 @@ def user_known(env, user, db=None):
 
 # Utility functions
 
-def change_uid(env, old_uid, new_uid, changers, attr_overwrite):
-    """Handle user ID transition for all supported Trac realms."""
-    db = _get_db(env)
-    # Handle the single unique Trac user ID reference first.
-    cursor = db.cursor()
-    sql = """
-        DELETE
-          FROM session
-         WHERE authenticated=1 AND sid=%s
-        """
-    cursor.execute(sql, (new_uid,))
-    cursor.execute("""
-        INSERT INTO session
-                (sid,authenticated,last_visit)
-        VALUES  (%s,1,(SELECT last_visit FROM session WHERE sid=%s))
-        """, (new_uid, old_uid))
-    # Process related attributes.
-    attr_count = copy_user_attributes(env, old_uid, new_uid, attr_overwrite,
-                                      db=db)
-    # May want to keep attributes, if not copied completely.
-    if attr_overwrite:
-        del_user_attribute(env, old_uid, db=db)
-
-    results = dict()
-    results.update({('session_attribute', 'sid', None): attr_count})
-    for changer in changers:
-        result = changer.replace(old_uid, new_uid, db)
-        if 'error' in result:
-            # Explicit transaction termination is required here to do clean-up
-            # before leaving this context.
-            db.rollback()
-            db = _get_db(env)
-            cursor = db.cursor()
-            cursor.execute(sql, (new_uid,))
-            return result
-        results.update(result)
-    # Finally delete old user ID reference after moving everything else.
-    cursor.execute(sql, (old_uid,))
-    results.update({('session', 'sid', None): 1})
-    db.commit()
-    return results
-
-def copy_user_attributes(env, username, new_uid, overwrite, db=None):
-    """Duplicate attributes for another user, optionally preserving existing
-    values.
-
-    Returns the number of changed attributes.
-    """
-    count = 0
-    db = _get_db(env, db)
-    attrs = get_user_attribute(env, username, db=db)
-
-    if attrs and username in attrs and attrs[username].get(1):
-        attrs_new = get_user_attribute(env, new_uid, db=db)
-        if not (attrs_new and new_uid in attrs_new and \
-                attrs_new[new_uid].get(1)):
-            # No attributes found.
-            attrs_new = None
-        # Remove value id hashes.
-        attrs[username][1].pop('id')
-        cursor = db.cursor()
-        for attribute, value in attrs[username][1].iteritems():
-            if not (attrs_new and attribute in attrs_new[new_uid][1]):
-                cursor.execute("""
-                    INSERT INTO session_attribute
-                            (sid,authenticated,name,value)
-                    VALUES  (%s,1,%s,%s)
-                    """, (new_uid, attribute, value))
-                count += 1
-            elif overwrite:
-                cursor.execute("""
-                    UPDATE session_attribute
-                       SET value=%s
-                     WHERE sid=%s
-                       AND authenticated=1
-                       AND name=%s
-                    """, (value, new_uid, attribute))
-                count += 1
-    return count
-
 def get_user_attribute(env, username=None, authenticated=1, attribute=None,
                        value=None, db=None):
     """Return user attributes."""
@@ -465,13 +94,13 @@ def get_user_attribute(env, username=None, authenticated=1, attribute=None,
         constraints.append(username)
     if authenticated is not None:
         columns.append('authenticated')
-        constraints.append(as_int(authenticated, 0, min=0, max=1))
+        constraints.append(authenticated)
     if attribute is not None:
         columns.append('name')
         constraints.append(attribute)
     if value is not None:
         columns.append('value')
-        constraints.append(to_unicode(value))
+        constraints.append(value)
     sel_columns = [col for col in ALL_COLS if col not in columns]
     if len(sel_columns) == 0:
         # No variable left, so only COUNTing is as a sensible task here. 
@@ -553,7 +182,6 @@ def prime_auth_session(env, username, db=None):
         SELECT COUNT(*)
           FROM session
          WHERE sid=%s
-           AND authenticated=1
         """, (username,))
     exists = cursor.fetchone()
     if not exists[0]:
@@ -599,7 +227,7 @@ def del_user_attribute(env, username=None, authenticated=1, attribute=None,
         constraints.append(username)
     if authenticated is not None:
         columns.append('authenticated')
-        constraints.append(as_int(authenticated, 0, min=0, max=1))
+        constraints.append(authenticated)
     if attribute is not None:
         columns.append('name')
         constraints.append(attribute)
@@ -652,7 +280,10 @@ def last_seen(env, user=None, db=None):
     else:
         cursor.execute(sql)
     # Don't pass over the cursor (outside of scope), only it's content.
-    return [row for row in cursor]
+    res = []
+    for row in cursor:
+        res.append(row)
+    return not len(res) == 0 and res or None
 
 
 # Internal functions
