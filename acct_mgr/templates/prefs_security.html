@@ -1,0 +1,127 @@
+<!DOCTYPE html
+    PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN"
+    "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml"
+      xmlns:py="http://genshi.edgewall.org/"
+      xmlns:xi="http://www.w3.org/2001/XInclude" 
+      xmlns:i18n="http://genshi.edgewall.org/i18n"
+      i18n:domain="acct_mgr">
+  <xi:include href="prefs.html" />
+  <?python
+    if _dgettext is not None:
+        dgettext = _dgettext ?>
+  
+  <!--! FIXME [1] prevents this from matching its own output.
+        Should that really be necessary? -->
+  <div py:match="div[@id='tabcontent'][1]" py:attrs="select('@*')">
+    ${select('*')}
+  </div>
+
+  <head>
+    <title>Security</title>
+  </head>
+          
+  <body>
+    <div class="system-message" py:if="account.error">
+      <h2>Error</h2>
+      <p>$account.error</p>
+    </div>
+    <p py:if="account.message">$account.message</p>
+
+     <div class="system-message" py:if="account.error_2fa">
+       <h2>Error</h2>
+       <p>$account.error_2fa</p>
+     </div>
+    
+    <py:choose test="account.enabled_2fa">
+        <py:when test="True">
+             <h2>Two Factor Authentication</h2>
+             <form method="post" action="" id="acctmgr_disable_2fa">
+              <div class="field">
+                <label>Password:
+                  <input type="password" name="password" class="textwidget"
+                         size="20" />
+                </label>
+              </div>
+              <div class="buttons">
+                <input type="hidden" name="action" value="disable" />
+                <input type="submit"
+                  value="${dgettext('acct_mgr', 'Disable')}" />
+              </div>
+            </form>
+            <hr/>
+            <h2>Back-up codes</h2>
+            <py:choose test="account.backup_2fa">
+                <py:when test="None">
+                    <form method="post" action="" id="acctmgr_backup_2fa">
+                      <div class="field">
+                        <label>Password:
+                          <input type="password" name="password" class="textwidget"
+                                 size="20" />
+                        </label>
+                      </div>
+                      <div class="buttons">
+                        <input type="hidden" name="action" value="generate" />
+                        <input type="submit"
+                          value="${dgettext('acct_mgr', 'Generate')}" />
+                      </div>
+                    </form>
+                </py:when>
+                <py:otherwise>
+                    <p>${dgettext('acct_mgr', 'Please write these codes down and keep them someplace accessible. Each code can be used only once.')}</p>
+                    <ul>
+                        <py:for each="code in account.backup_2fa">
+                            <li>${code}</li>
+                        </py:for>
+                    </ul>
+                </py:otherwise>
+            </py:choose>              
+        </py:when>
+        <py:when test="False">
+            <h2>Two Factor Authentication</h2>
+            <form method="post" action="" id="acctmgr_enable_2fa">
+              <div class="field">
+                <label>Password:
+                  <input type="password" name="password" class="textwidget"
+                         size="20" />
+                </label>
+              </div>
+              <div class="buttons">
+                <input type="hidden" name="action" value="enable" />
+                <input type="submit"
+                  value="${dgettext('acct_mgr', 'Enable')}" />
+              </div>
+            </form>  
+        </py:when>
+        <py:when test="None">
+            <h2>QR code and key</h2>
+            <div id="qr">
+                $account.qr_2fa
+            </div>
+            <div id="secret_key">
+                $account.secret_2fa
+            </div>
+            <p>${dgettext('acct_mgr', 'Please enter the code from your authenticator app to finalize the process.')}</p>
+            <form method="post" action="" id="acctmgr_finalize_2fa">
+              <div class="field">
+                <label>Code:
+                  <input type="text" name="2fa_code" class="textwidget"
+                         size="20" />
+                </label>
+              </div>
+              <div class="buttons">
+                <input type="hidden" name="secret" value="$account.secret_2fa" />
+                <input type="hidden" name="action" value="finalize" />
+                <input type="submit"
+                  value="${dgettext('acct_mgr', 'Enable')}" />
+              </div>
+            </form>              
+        </py:when>
+    </py:choose>
+
+    <div class="system-message" py:if="account.save_error">
+      <h2>Error</h2>
+      <p>$account.save_error</p>
+    </div>  
+  </body>
+</html>

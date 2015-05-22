@@ -11,7 +11,13 @@
 
 import random
 import string
+import StringIO
 import time
+import urllib
+
+import pyotp
+import qrcode
+import qrcode.image.svg
 
 from datetime import timedelta
 from genshi.core import Markup
@@ -33,7 +39,8 @@ from acct_mgr.api import AccountManager, CommonTemplateProvider, \
                          _, dgettext, ngettext, tag_
 from acct_mgr.db import SessionStore
 from acct_mgr.guard import AccountGuard
-from acct_mgr.model import set_user_attribute, user_known
+from acct_mgr.model import set_user_attribute, user_known, get_user_attribute, \
+    del_user_attribute
 from acct_mgr.register import EmailVerificationModule, RegistrationModule
 from acct_mgr.util import if_enabled, is_enabled
 
@@ -89,12 +96,20 @@ class AccountModule(CommonTemplateProvider):
             user_store = self.acctmgr.find_user_store(req.authname)
             if user_store in writable:
                 yield 'account', _("Account")
+                if self.env.components[LoginModule].allow_2fa:
+                    yield 'security', _("Security")
 
     def render_preference_panel(self, req, panel):
-        data = {'account': self._do_account(req),
-                '_dgettext': dgettext,
-               }
-        return 'prefs_account.html', data
+        if panel == "account":
+            data = {'account': self._do_account(req),
+                    '_dgettext': dgettext,
+                    }
+            return 'prefs_account.html', data
+        if panel == "security":
+            data = {'account': self._do_security(req),
+                    '_dgettext': dgettext,
+                    }
+            return 'prefs_security.html', data
 
     # IRequestHandler methods
 
@@ -150,6 +165,94 @@ class AccountModule(CommonTemplateProvider):
                self.store.hash_method and True or False
 
     reset_password_enabled = property(_reset_password_enabled)
+
+    def _do_security(self, req):
+        assert(req.authname and req.authname != 'anonymous')
+        user = req.authname
+        action = req.args.get('action')
+        try:
+            enabled = get_user_attribute(
+                self.env, user, attribute="2fa")[user][1]["2fa"] == "1"
+        except KeyError:
+            enabled = False
+        data = {"enabled_2fa": enabled,
+                "backup_2fa": None}
+        if req.method == 'POST':
+            if action in ('disable', 'enable', 'generate'):
+                # The user must re-enter the password correctly to make changes
+                password = req.args.get('password')
+                if not password:
+                    data['error_2fa'] = _("Password cannot be empty.")
+                    return data
+                if not self.acctmgr.check_password(user, password):
+                    data['error_2fa'] = _("Password is incorrect.")
+                    return data
+
+            if action == "disable":
+                # Disable Two Factor Authentication for this account.
+                set_user_attribute(self.env, user, "2fa", "0")
+                del_user_attribute(self.env, user, attribute="2fa_secret")
+                del_user_attribute(self.env, user, attribute="2fa_backup")
+                chrome.add_notice(req, Markup(tag.span(tag_(
+                    "Two Factor Authentication has been disabled."
+                ))))
+                data["enabled_2fa"] = False
+            elif action == "enable":
+                # Create a random secret and direct the user to the QR and key
+                # page to finalize the process.
+                secret = pyotp.random_base32()
+                totp = self._get_qr_and_key(user, secret, data)
+                set_user_attribute(self.env, user, "2fa_secret", secret)
+                data["enabled_2fa"] = None
+            elif action == "finalize":
+                # Finalize enabling 2FA by having the user input an OTP code
+                # based on the secret key we have stored.
+                secret = get_user_attribute(
+                    self.env, user)[user][1]["2fa_secret"]
+                code = req.args.get("2fa_code")
+                totp = pyotp.TOTP(secret)
+                if not totp.verify(code):
+                    totp = self._get_qr_and_key(user, secret, data)
+                    data["enabled_2fa"] = None
+                    data['error_2fa'] = _("Invalid code.")
+                    return data
+                set_user_attribute(self.env, user, "2fa", "1")
+                del_user_attribute(self.env, user, attribute="2fa_backup")
+                chrome.add_notice(req, Markup(tag.span(tag_(
+                    "Two Factor Authentication has been enabled."
+                ))))
+                data["enabled_2fa"] = True
+            elif action == "generate":
+                # Generate random back-ups codes store them in the database
+                # and show them to the user.
+                backup_codes = []
+                show_codes = []
+                for dummy in range(5):
+                    code1 = str(random.randint(0, 10000)).zfill(4)
+                    code2 = str(random.randint(0, 10000)).zfill(4)
+                    backup_codes.append(code1 + code2)
+                    show_codes.append("%s %s" % (code1, code2))
+                data["backup_2fa"] = show_codes
+                chrome.add_notice(req, Markup(tag.span(tag_(
+                    "New back-up codes have been generated."
+                ))))
+                set_user_attribute(self.env, user, "2fa_backup",
+                                   ",".join(backup_codes))
+        return data
+
+    def _get_qr_and_key(self, user, secret, data):
+        totp = pyotp.TOTP(secret)
+        uri = totp.provisioning_uri(user)
+
+        stream = StringIO.StringIO()
+        factory = qrcode.image.svg.SvgPathImage
+        qrcode.make(uri, image_factory=factory).save(stream)
+        stream.seek(0)
+        qr = Markup(stream.read())
+
+        data["secret_2fa"] = secret
+        data["qr_2fa"] = qr
+        return totp
 
     def _do_account(self, req):
         assert(req.authname and req.authname != 'anonymous')
@@ -305,6 +408,10 @@ class LoginModule(auth.LoginModule, CommonTemplateProvider):
         """Whether environment variable REMOTE_USER should get overwritten after processing login
         form input. Otherwise it will only be set, if unset at the time of authentication.""")
 
+    allow_2fa = BoolOption(
+        'account-manager', 'allow_2fa', True,
+        """Allow users to setup two factor authentication for their accounts.""")
+
     # Update cookies for persistant sessions only 1/day.
     #   hex_entropy returns 32 chars per call equal to 128 bit of entropy,
     #   so it should be technically impossible to explore the hash even within
@@ -332,9 +439,58 @@ class LoginModule(auth.LoginModule, CommonTemplateProvider):
             self.cookie_lifetime = 86400 * 30   # AcctMgr default = 30 days
         self.auth_share_participants = []
 
+    def auth_2fa(self, req):
+        """Authenticate the user with 2FA. The trac_auth_2fa cookie is checked
+        for validity to prevent attacks.
+        """
+        user = req.args.get("user")
+        code = req.args.get("2fa_code")
+        try:
+            attrs = get_user_attribute(self.env, user)[user][1]
+            token = req.incookie.get("trac_auth_2fa").value
+            assert token == attrs["2fa_token"]
+
+            if len(code) == 6:
+                totp = pyotp.TOTP(attrs["2fa_secret"])
+                assert totp.verify(code)
+            else:
+                # Must be a back-up code
+                code = code.replace(" ", "")
+                backup_codes = attrs["2fa_backup"].split(",")
+                assert code in backup_codes
+                # Remove this code so it cannot be used again.
+                backup_codes.remove(code)
+                set_user_attribute(self.env, user, "2fa_backup",
+                                   ",".join(backup_codes))
+        except (KeyError, AttributeError, AssertionError, TypeError):
+            req.environ['REMOTE_USER'] = None
+            return auth.LoginModule.authenticate(self, req)
+
+        # Remove the cookie
+        del_user_attribute(self.env, user, attribute="2fa_token")
+        cookie_path = self._get_cookie_path(req)
+        req.outcookie["trac_auth_2fa"] = ''
+        req.outcookie['trac_auth_2fa']['path'] = cookie_path
+        req.outcookie['trac_auth_2fa']['expires'] = -10000
+        if self.env.secure_cookies:
+            req.outcookie['trac_auth_2fa']['secure'] = True
+        if not 'REMOTE_USER' in req.environ or self.environ_auth_overwrite:
+            if 'REMOTE_USER' in req.environ:
+                # Complain about another component setting environment
+                # variable for authenticated user.
+                self.env.log.warn("LoginModule.authenticate: "
+                                  "'REMOTE_USER' was set to '%s'"
+                                  % req.environ['REMOTE_USER'])
+            self.env.log.debug("LoginModule.authenticate: Set "
+                               "'REMOTE_USER' = '%s'" % user)
+            req.environ['REMOTE_USER'] = user
+        return auth.LoginModule.authenticate(self, req)
+
     def authenticate(self, req):
         if req.method == 'POST' and req.path_info.startswith('/login') and \
                 req.args.get('user_locked') is None:
+            if req.args.get("2fa") == "1" and self.allow_2fa:
+                return self.auth_2fa(req)
             user = self._remote_user(req)
             acctmgr = AccountManager(self.env)
             guard = AccountGuard(self.env)
@@ -361,6 +517,33 @@ class LoginModule(auth.LoginModule, CommonTemplateProvider):
                                                                  reset=True)
             else:
                 req.args['user_locked'] = False
+
+            if user:
+                # Check if 2FA is activated, if it is generate a auth cookie
+                # and redirect to the Authentication Code input form.
+                try:
+                    active = get_user_attribute(
+                        self.env, user, attribute="2fa")[user][1]["2fa"] == "1"
+                except KeyError:
+                    active = False
+                if active and self.allow_2fa:
+                    value = hex_entropy()
+                    cookie_path = self._get_cookie_path(req)
+                    set_user_attribute(self.env, user, "2fa_token", value)
+                    req.outcookie["trac_auth_2fa"] = value
+                    req.outcookie['trac_auth_2fa']['path'] = cookie_path
+                    req.outcookie['trac_auth_2fa']['expires'] = 300
+                    if self.env.secure_cookies:
+                        req.outcookie['trac_auth_2fa']['secure'] = True
+
+                    # Copy referal from the original request.
+                    new_args = {"referer": req.args.get("referer"),
+                                "user": user,
+                                "2fa": "1"
+                                }
+                    req.redirect("%s%s?%s" % (req.base_url,
+                                              req.environ["PATH_INFO"],
+                                              urllib.urlencode(new_args)))
             if not 'REMOTE_USER' in req.environ or self.environ_auth_overwrite:
                 if 'REMOTE_USER' in req.environ:
                     # Complain about another component setting environment
@@ -398,7 +581,8 @@ class LoginModule(auth.LoginModule, CommonTemplateProvider):
                 'reset_password_enabled': AccountModule(self.env
                                           ).reset_password_enabled
             }
-            if req.method == 'POST':
+
+            if req.method == 'POST' and req.args.get("2fa") != "1":
                 self.log.debug(
                     "LoginModule.process_request: 'user_locked' = %s"
                     % req.args.get('user_locked'))
@@ -416,6 +600,11 @@ class LoginModule(auth.LoginModule, CommonTemplateProvider):
                             """, release_time=release_time)
                     else:
                         data['login_error'] = _("Account locked")
+            if req.method == 'POST' and req.args.get("2fa") == "1":
+                data['login_error'] = _("Invalid code.")
+            if req.args.get("2fa") == "1":
+                data["user"] = req.args.get("user")
+                return "2fa.html", data, None
             return 'login.html', data, None
         else:
             n_plural=req.args.get('failed_logins')
