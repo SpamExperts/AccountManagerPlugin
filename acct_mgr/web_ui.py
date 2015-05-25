@@ -467,7 +467,10 @@ class LoginModule(auth.LoginModule, CommonTemplateProvider):
             return auth.LoginModule.authenticate(self, req)
 
         # Remove the cookie
-        del_user_attribute(self.env, user, attribute="2fa_token")
+        # XXX This doesn't work because Trac authenticates twice and
+        # XXX we need to keep the token. See discussion:
+        # XXX http://thread.gmane.org/gmane.comp.version-control.subversion.trac.devel/4809
+        # del_user_attribute(self.env, user, attribute="2fa_token")
         cookie_path = self._get_cookie_path(req)
         req.outcookie["trac_auth_2fa"] = ''
         req.outcookie['trac_auth_2fa']['path'] = cookie_path
