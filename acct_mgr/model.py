@@ -309,22 +309,22 @@ class WikiUserIdChanger(PrimitiveUserIdChanger):
 
 # Public functions
 
-def email_associated(env, email, db=None):
+def email_associated(env, email):
     """Returns whether an authenticated user account with that email address
     exists.
     """
-    db = _get_db(env, db)
-    cursor = db.cursor()
-    cursor.execute("""
-        SELECT value
-          FROM session_attribute
-         WHERE authenticated=1 AND name='email' AND value=%s
-        """, (email,))
-    for row in cursor:
-        return True
+    with env.db_query as db:
+        cursor = db.cursor()
+        cursor.execute("""
+            SELECT value
+              FROM session_attribute
+             WHERE authenticated=1 AND name='email' AND value=%s
+            """, (email,))
+        for row in cursor:
+            return True
     return False
 
-def email_verified(env, user, email, db=None):
+def email_verified(env, user, email):
     """Returns whether the account and email has been verified.
 
     Use with care, as it returns the private token string,
@@ -333,42 +333,42 @@ def email_verified(env, user, email, db=None):
     if not user_known(env, user) or not email:
         # Nothing more to check here.
         return None
-    db = _get_db(env, db)
-    cursor = db.cursor()
-    cursor.execute("""
-        SELECT value
-          FROM session_attribute
-         WHERE sid=%s AND name='email_verification_sent_to'
-        """, (user,))
-    for row in cursor:
-        env.log.debug('AcctMgr:model:email_verified for user \"' + \
-            user + '\", email \"' + str(email) + '\": ' + str(row[0]))
-        if row[0] != email:
-            # verification has been sent to different email address
-            return None
-    cursor.execute("""
-        SELECT value
-          FROM session_attribute
-         WHERE sid=%s AND name='email_verification_token'
-        """, (user,))
-    for row in cursor:
-        # verification token still unverified
-        env.log.debug('AcctMgr:model:email_verified for user \"' + \
-            user + '\", email \"' + str(email) + '\": ' + str(row[0]))
-        return row[0]
+    with env.db_query as db:
+        cursor = db.cursor()
+        cursor.execute("""
+            SELECT value
+              FROM session_attribute
+             WHERE sid=%s AND name='email_verification_sent_to'
+            """, (user,))
+        for row in cursor:
+            env.log.debug('AcctMgr:model:email_verified for user \"' + \
+                user + '\", email \"' + str(email) + '\": ' + str(row[0]))
+            if row[0] != email:
+                # verification has been sent to different email address
+                return None
+        cursor.execute("""
+            SELECT value
+              FROM session_attribute
+             WHERE sid=%s AND name='email_verification_token'
+            """, (user,))
+        for row in cursor:
+            # verification token still unverified
+            env.log.debug('AcctMgr:model:email_verified for user \"' + \
+                user + '\", email \"' + str(email) + '\": ' + str(row[0]))
+            return row[0]
     return True
 
-def user_known(env, user, db=None):
+def user_known(env, user):
     """Returns whether the user has ever been authenticated before."""
-    db = _get_db(env, db)
-    cursor = db.cursor()
-    cursor.execute("""
-        SELECT 1
-          FROM session
-         WHERE authenticated=1 AND sid=%s
-        """, (user,))
-    for row in cursor:
-        return True
+    with env.db_query as db:
+        cursor = db.cursor()
+        cursor.execute("""
+            SELECT 1
+              FROM session
+             WHERE authenticated=1 AND sid=%s
+            """, (user,))
+        for row in cursor:
+            return True
     return False
 
 
@@ -376,86 +376,83 @@ def user_known(env, user, db=None):
 
 def change_uid(env, old_uid, new_uid, changers, attr_overwrite):
     """Handle user ID transition for all supported Trac realms."""
-    db = _get_db(env)
-    # Handle the single unique Trac user ID reference first.
-    cursor = db.cursor()
-    sql = """
-        DELETE
-          FROM session
-         WHERE authenticated=1 AND sid=%s
-        """
-    cursor.execute(sql, (new_uid,))
-    cursor.execute("""
-        INSERT INTO session
-                (sid,authenticated,last_visit)
-        VALUES  (%s,1,(SELECT last_visit FROM session WHERE sid=%s))
-        """, (new_uid, old_uid))
-    # Process related attributes.
-    attr_count = copy_user_attributes(env, old_uid, new_uid, attr_overwrite,
-                                      db=db)
-    # May want to keep attributes, if not copied completely.
-    if attr_overwrite:
-        del_user_attribute(env, old_uid, db=db)
+    with env.db_transaction as db:
+        # Handle the single unique Trac user ID reference first.
+        cursor = db.cursor()
+        sql = """
+            DELETE
+              FROM session
+             WHERE authenticated=1 AND sid=%s
+            """
+        cursor.execute(sql, (new_uid,))
+        cursor.execute("""
+            INSERT INTO session
+                    (sid,authenticated,last_visit)
+            VALUES  (%s,1,(SELECT last_visit FROM session WHERE sid=%s))
+            """, (new_uid, old_uid))
+        # Process related attributes.
+        attr_count = copy_user_attributes(env, old_uid, new_uid, attr_overwrite)
+        # May want to keep attributes, if not copied completely.
+        if attr_overwrite:
+            del_user_attribute(env, old_uid)
 
-    results = dict()
-    results.update({('session_attribute', 'sid', None): attr_count})
-    for changer in changers:
-        result = changer.replace(old_uid, new_uid, db)
-        if 'error' in result:
-            # Explicit transaction termination is required here to do clean-up
-            # before leaving this context.
-            db.rollback()
-            db = _get_db(env)
-            cursor = db.cursor()
-            cursor.execute(sql, (new_uid,))
-            return result
-        results.update(result)
-    # Finally delete old user ID reference after moving everything else.
-    cursor.execute(sql, (old_uid,))
-    results.update({('session', 'sid', None): 1})
-    db.commit()
+        results = dict()
+        results.update({('session_attribute', 'sid', None): attr_count})
+        for changer in changers:
+            result = changer.replace(old_uid, new_uid)
+            if 'error' in result:
+                # Explicit transaction termination is required here to do clean-up
+                # before leaving this context.
+                db.rollback()
+                with env.db_transaction as db:
+                    cursor = db.cursor()
+                    cursor.execute(sql, (new_uid,))
+                return result
+            results.update(result)
+        # Finally delete old user ID reference after moving everything else.
+        cursor.execute(sql, (old_uid,))
+        results.update({('session', 'sid', None): 1})
     return results
 
-def copy_user_attributes(env, username, new_uid, overwrite, db=None):
+def copy_user_attributes(env, username, new_uid, overwrite):
     """Duplicate attributes for another user, optionally preserving existing
     values.
 
     Returns the number of changed attributes.
     """
     count = 0
-    db = _get_db(env, db)
-    attrs = get_user_attribute(env, username, db=db)
-
+    attrs = get_user_attribute(env, username)
     if attrs and username in attrs and attrs[username].get(1):
-        attrs_new = get_user_attribute(env, new_uid, db=db)
-        if not (attrs_new and new_uid in attrs_new and \
-                attrs_new[new_uid].get(1)):
-            # No attributes found.
-            attrs_new = None
-        # Remove value id hashes.
-        attrs[username][1].pop('id')
-        cursor = db.cursor()
-        for attribute, value in attrs[username][1].iteritems():
-            if not (attrs_new and attribute in attrs_new[new_uid][1]):
-                cursor.execute("""
-                    INSERT INTO session_attribute
-                            (sid,authenticated,name,value)
-                    VALUES  (%s,1,%s,%s)
-                    """, (new_uid, attribute, value))
-                count += 1
-            elif overwrite:
-                cursor.execute("""
-                    UPDATE session_attribute
-                       SET value=%s
-                     WHERE sid=%s
-                       AND authenticated=1
-                       AND name=%s
-                    """, (value, new_uid, attribute))
-                count += 1
+        attrs_new = get_user_attribute(env, new_uid)
+        with env.db_transaction as db:
+            if not (attrs_new and new_uid in attrs_new and \
+                    attrs_new[new_uid].get(1)):
+                # No attributes found.
+                attrs_new = None
+            # Remove value id hashes.
+            attrs[username][1].pop('id')
+            cursor = db.cursor()
+            for attribute, value in attrs[username][1].iteritems():
+                if not (attrs_new and attribute in attrs_new[new_uid][1]):
+                    cursor.execute("""
+                        INSERT INTO session_attribute
+                                (sid,authenticated,name,value)
+                        VALUES  (%s,1,%s,%s)
+                        """, (new_uid, attribute, value))
+                    count += 1
+                elif overwrite:
+                    cursor.execute("""
+                        UPDATE session_attribute
+                           SET value=%s
+                         WHERE sid=%s
+                           AND authenticated=1
+                           AND name=%s
+                        """, (value, new_uid, attribute))
+                    count += 1
     return count
 
 def get_user_attribute(env, username=None, authenticated=1, attribute=None,
-                       value=None, db=None):
+                       value=None):
     """Return user attributes."""
     ALL_COLS = ('sid', 'authenticated', 'name', 'value')
     columns = []
@@ -474,7 +471,7 @@ def get_user_attribute(env, username=None, authenticated=1, attribute=None,
         constraints.append(to_unicode(value))
     sel_columns = [col for col in ALL_COLS if col not in columns]
     if len(sel_columns) == 0:
-        # No variable left, so only COUNTing is as a sensible task here. 
+        # No variable left, so only COUNTing is as a sensible task here.
         sel_stmt = 'COUNT(*)'
     else:
         if 'sid' not in sel_columns:
@@ -491,55 +488,55 @@ def get_user_attribute(env, username=None, authenticated=1, attribute=None,
         """ % (sel_stmt, where_stmt)
     sql_args = tuple(constraints)
 
-    db = _get_db(env, db)
-    cursor = db.cursor()
-    cursor.execute(sql, sql_args)
-    rows = cursor.fetchall()
-    if rows is None:
-        return {}
-    res = {}
-    for row in rows:
-        if sel_stmt == 'COUNT(*)':
-            return [row[0]]
-        res_row = {}
-        res_row.update(zip(sel_columns, row))
-        # Merge with constraints, that are constants for this SQL query.
-        res_row.update(zip(columns, constraints))
-        account = res_row.pop('sid')
-        authenticated = res_row.pop('authenticated')
-        # Create single unique attribute ID.
-        m = md5()
-        m.update(''.join([account, str(authenticated),
-                           res_row.get('name')]).encode('utf-8'))
-        row_id = m.hexdigest()
-        if account in res:
-            if authenticated in res[account]:
-                res[account][authenticated].update({
-                    res_row['name']: res_row['value']
-                })
-                res[account][authenticated]['id'].update({
-                    res_row['name']: row_id
-                })
-            else:
-                res[account][authenticated] = {
-                    res_row['name']: res_row['value'],
-                    'id': {res_row['name']: row_id}
-                }
-                # Create account ID for additional authentication state.
-                m = md5()
-                m.update(''.join([account,
-                                  str(authenticated)]).encode('utf-8'))
-                res[account]['id'][authenticated] = m.hexdigest()
-        else:
-            # Create account ID for authentication state.
+    with env.db_query as db:
+        cursor = db.cursor()
+        cursor.execute(sql, sql_args)
+        rows = cursor.fetchall()
+        if rows is None:
+            return {}
+        res = {}
+        for row in rows:
+            if sel_stmt == 'COUNT(*)':
+                return [row[0]]
+            res_row = {}
+            res_row.update(zip(sel_columns, row))
+            # Merge with constraints, that are constants for this SQL query.
+            res_row.update(zip(columns, constraints))
+            account = res_row.pop('sid')
+            authenticated = res_row.pop('authenticated')
+            # Create single unique attribute ID.
             m = md5()
-            m.update(''.join([account, str(authenticated)]).encode('utf-8'))
-            res[account] = {authenticated: {res_row['name']: res_row['value'],
-                                            'id': {res_row['name']: row_id}},
-                            'id': {authenticated: m.hexdigest()}}
+            m.update(''.join([account, str(authenticated),
+                               res_row.get('name')]).encode('utf-8'))
+            row_id = m.hexdigest()
+            if account in res:
+                if authenticated in res[account]:
+                    res[account][authenticated].update({
+                        res_row['name']: res_row['value']
+                    })
+                    res[account][authenticated]['id'].update({
+                        res_row['name']: row_id
+                    })
+                else:
+                    res[account][authenticated] = {
+                        res_row['name']: res_row['value'],
+                        'id': {res_row['name']: row_id}
+                    }
+                    # Create account ID for additional authentication state.
+                    m = md5()
+                    m.update(''.join([account,
+                                      str(authenticated)]).encode('utf-8'))
+                    res[account]['id'][authenticated] = m.hexdigest()
+            else:
+                # Create account ID for authentication state.
+                m = md5()
+                m.update(''.join([account, str(authenticated)]).encode('utf-8'))
+                res[account] = {authenticated: {res_row['name']: res_row['value'],
+                                                'id': {res_row['name']: row_id}},
+                                'id': {authenticated: m.hexdigest()}}
     return res
 
-def prime_auth_session(env, username, db=None):
+def prime_auth_session(env, username):
     """Prime session for registered users before initial login.
 
     These days there's no distinct user object in Trac, but users consist
@@ -547,50 +544,47 @@ def prime_auth_session(env, username, db=None):
     attributes.  So INSERT new sid, needed as foreign key in some db schemata
     later on, at least for PostgreSQL.
     """
-    db = _get_db(env, db)
-    cursor = db.cursor()
-    cursor.execute("""
-        SELECT COUNT(*)
-          FROM session
-         WHERE sid=%s
-           AND authenticated=1
-        """, (username,))
-    exists = cursor.fetchone()
-    if not exists[0]:
+    with env.db_transaction as db:
+        cursor = db.cursor()
         cursor.execute("""
-            INSERT INTO session
-                    (sid,authenticated,last_visit)
-            VALUES  (%s,1,0)
+            SELECT COUNT(*)
+              FROM session
+             WHERE sid=%s
+               AND authenticated=1
             """, (username,))
-        db.commit()
+        exists = cursor.fetchone()
+        if not exists[0]:
+            cursor.execute("""
+                INSERT INTO session
+                        (sid,authenticated,last_visit)
+                VALUES  (%s,1,0)
+                """, (username,))
 
-def set_user_attribute(env, username, attribute, value, db=None):
+def set_user_attribute(env, username, attribute, value):
     """Set or update a Trac user attribute within an atomic db transaction."""
-    db = _get_db(env, db)
-    cursor = db.cursor()
-    sql = """
-        WHERE   sid=%s
-            AND authenticated=1
-            AND name=%s
-        """
-    cursor.execute("""
-        UPDATE  session_attribute
-            SET value=%s
-        """ + sql, (value, username, attribute))
-    cursor.execute("""
-        SELECT  value
-          FROM  session_attribute
-        """ + sql, (username, attribute))
-    if cursor.fetchone() is None:
+    with env.db_transaction as db:
+        cursor = db.cursor()
+        sql = """
+            WHERE   sid=%s
+                AND authenticated=1
+                AND name=%s
+            """
         cursor.execute("""
-            INSERT INTO session_attribute
-                    (sid,authenticated,name,value)
-            VALUES  (%s,1,%s,%s)
-            """, (username, attribute, value))
-    db.commit()
+            UPDATE  session_attribute
+                SET value=%s
+            """ + sql, (value, username, attribute))
+        cursor.execute("""
+            SELECT  value
+              FROM  session_attribute
+            """ + sql, (username, attribute))
+        if cursor.fetchone() is None:
+            cursor.execute("""
+                INSERT INTO session_attribute
+                        (sid,authenticated,name,value)
+                VALUES  (%s,1,%s,%s)
+                """, (username, attribute, value))
 
-def del_user_attribute(env, username=None, authenticated=1, attribute=None,
-                       db=None):
+def del_user_attribute(env, username=None, authenticated=1, attribute=None):
     """Delete one or more Trac user attributes for one or more users."""
     columns = []
     constraints = []
@@ -614,48 +608,38 @@ def del_user_attribute(env, username=None, authenticated=1, attribute=None,
         """ % where_stmt
     sql_args = tuple(constraints)
 
-    db = _get_db(env, db)
-    cursor = db.cursor()
-    cursor.execute(sql, sql_args)
-    db.commit()
+    with env.db_transaction as db:
+        cursor = db.cursor()
+        cursor.execute(sql, sql_args)
 
-def delete_user(env, user, db=None):
+def delete_user(env, user):
     # Delete session attributes, session and any custom permissions
     # set for the user.
-    db = _get_db(env, db)
-    cursor = db.cursor()
-    for table in ['auth_cookie', 'session_attribute', 'session', 'permission']:
-        # Preseed, since variable table and column names aren't allowed
-        # as SQL arguments (security measure agains SQL injections).
-        sql = """
-            DELETE
-              FROM %s
-             WHERE %s=%%s
-            """ % (table, _USER_KEYS.get(table, 'sid'))
-        cursor.execute(sql, (user,))
-    db.commit()
-    # DEVEL: Is this really needed?
-    db.close()
+    with env.db_transaction as db:
+        cursor = db.cursor()
+        for table in ['auth_cookie', 'session_attribute', 'session', 'permission']:
+            # Preseed, since variable table and column names aren't allowed
+            # as SQL arguments (security measure agains SQL injections).
+            sql = """
+                DELETE
+                  FROM %s
+                 WHERE %s=%%s
+                """ % (table, _USER_KEYS.get(table, 'sid'))
+            cursor.execute(sql, (user,))
     env.log.debug("Purged session data and permissions for user '%s'" % user)
 
-def last_seen(env, user=None, db=None):
-    db = _get_db(env, db)
-    cursor = db.cursor()
-    sql = """
-        SELECT sid,last_visit
-          FROM session
-         WHERE authenticated=1
-        """
-    if user:
-        sql += " AND sid=%s"
-        cursor.execute(sql, (user,))
-    else:
-        cursor.execute(sql)
-    # Don't pass over the cursor (outside of scope), only it's content.
-    return [row for row in cursor]
-
-
-# Internal functions
-
-def _get_db(env, db=None):
-    return db or env.get_db_cnx()
+def last_seen(env, user=None):
+    with env.db_query as db:
+        cursor = db.cursor()
+        sql = """
+            SELECT sid,last_visit
+              FROM session
+             WHERE authenticated=1
+            """
+        if user:
+            sql += " AND sid=%s"
+            cursor.execute(sql, (user,))
+        else:
+            cursor.execute(sql)
+        # Don't pass over the cursor (outside of scope), only it's content.
+        return [row for row in cursor]

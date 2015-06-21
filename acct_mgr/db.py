@@ -30,30 +30,30 @@ class SessionStore(Component):
 
     def get_users(self):
         """Returns an iterable of the known usernames."""
-        db = self.env.get_db_cnx()
-        cursor = db.cursor()
-        cursor.execute("""
-            SELECT DISTINCT sid
-            FROM    session_attribute
-            WHERE   authenticated=1
-                AND name=%s
-            """, (self.key,))
-        for sid, in cursor:
-            yield sid
- 
+        with self.env.db_query as db:
+            cursor = db.cursor()
+            cursor.execute("""
+                SELECT DISTINCT sid
+                FROM    session_attribute
+                WHERE   authenticated=1
+                    AND name=%s
+                """, (self.key,))
+            for sid, in cursor:
+                yield sid
+
     def has_user(self, user):
-        db = self.env.get_db_cnx()
-        cursor = db.cursor()
-        cursor.execute("""
-            SELECT  *
-            FROM    session_attribute
-            WHERE   authenticated=1
-                AND name=%s
-                AND sid=%s
-            """, (self.key, user))
-        for row in cursor:
-            return True
-        return False
+        with self.env.db_query as db:
+            cursor = db.cursor()
+            cursor.execute("""
+                SELECT  *
+                FROM    session_attribute
+                WHERE   authenticated=1
+                    AND name=%s
+                    AND sid=%s
+                """, (self.key, user))
+            for row in cursor:
+                return True
+            return False
 
     def set_password(self, user, password, old_password=None, overwrite=True):
         """Sets the password for the user.
@@ -65,47 +65,46 @@ class SessionStore(Component):
         if not self.hash_method_enabled:
             return
         hash = self.hash_method.generate_hash(user, password)
-        db = self.env.get_db_cnx()
-        cursor = db.cursor()
-        sql = """
-            WHERE   authenticated=1
-                AND name=%s
-                AND sid=%s
-            """
-        if overwrite:
+        with self.env.db_transaction as db:
+            cursor = db.cursor()
+            sql = """
+                WHERE   authenticated=1
+                    AND name=%s
+                    AND sid=%s
+                """
+            if overwrite:
+                cursor.execute("""
+                    UPDATE  session_attribute
+                        SET value=%s
+                    """ + sql, (hash, self.key, user))
             cursor.execute("""
-                UPDATE  session_attribute
-                    SET value=%s
-                """ + sql, (hash, self.key, user))
-        cursor.execute("""
-            SELECT  value
-            FROM    session_attribute
-            """ + sql, (self.key, user))
-        exists = cursor.fetchone()
-        if not exists:
-            cursor.execute("""
-                INSERT INTO session_attribute
-                        (sid,authenticated,name,value)
-                VALUES  (%s,1,%s,%s)
-                """, (user, self.key, hash))
-        db.commit()
+                SELECT  value
+                FROM    session_attribute
+                """ + sql, (self.key, user))
+            exists = cursor.fetchone()
+            if not exists:
+                cursor.execute("""
+                    INSERT INTO session_attribute
+                            (sid,authenticated,name,value)
+                    VALUES  (%s,1,%s,%s)
+                    """, (user, self.key, hash))
         return not exists
 
     def check_password(self, user, password):
         """Checks if the password is valid for the user."""
         if not self.hash_method_enabled:
             return
-        db = self.env.get_db_cnx()
-        cursor = db.cursor()
-        cursor.execute("""
-            SELECT  value
-            FROM    session_attribute
-            WHERE   authenticated=1
-                AND name=%s
-                AND sid=%s
-            """, (self.key, user))
-        for hash, in cursor:
-            return self.hash_method.check_hash(user, password, hash)
+        with self.env.db_query as db:
+            cursor = db.cursor()
+            cursor.execute("""
+                SELECT  value
+                FROM    session_attribute
+                WHERE   authenticated=1
+                    AND name=%s
+                    AND sid=%s
+                """, (self.key, user))
+            for hash, in cursor:
+                return self.hash_method.check_hash(user, password, hash)
         # Return value 'None' allows to proceed with another, chained store.
         return
 
@@ -114,25 +113,25 @@ class SessionStore(Component):
 
         Returns True, if the account existed and was deleted, False otherwise.
         """
-        db = self.env.get_db_cnx()
-        cursor = db.cursor()
-        sql = """
-            WHERE   authenticated=1
-                AND name=%s
-                AND sid=%s
-            """
-        # Avoid has_user() to make this transaction atomic.
-        cursor.execute("""
-            SELECT  *
-            FROM    session_attribute
-            """ + sql, (self.key, user))
-        exists = cursor.fetchone() is not None
-        if exists:
+        with self.env.db_transaction as db:
+            cursor = db.cursor()
+            sql = """
+                WHERE   authenticated=1
+                    AND name=%s
+                    AND sid=%s
+                """
+            # Avoid has_user() to make this transaction atomic.
             cursor.execute("""
-                DELETE
+                SELECT  *
                 FROM    session_attribute
                 """ + sql, (self.key, user))
-            db.commit()
+            exists = cursor.fetchone() is not None
+            if exists:
+                cursor.execute("""
+                    DELETE
+                    FROM    session_attribute
+                    """ + sql, (self.key, user))
+                db.commit()
         return exists
 
     @property
