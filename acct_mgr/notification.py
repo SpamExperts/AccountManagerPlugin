@@ -15,7 +15,7 @@ from trac import __version__
 from trac.core import Component, TracError, implements
 from trac.admin import IAdminPanelProvider
 from trac.config import Option, ListOption
-from trac.notification import NotifyEmail
+from acct_mgr.notify_email import NotifyEmail
 
 from acct_mgr.api import IAccountChangeListener, CommonTemplateProvider, \
                          _, dgettext
